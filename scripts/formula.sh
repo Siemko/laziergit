@@ -32,7 +32,8 @@ class Laziergit < Formula
   depends_on macos: :monterey
 
   def install
-    prefix.install "laziergit.app"
+    # Homebrew unpacks into the tarball's one top-level directory, the app.
+    (prefix/"laziergit.app").install "Contents"
     bin.write_exec_script prefix/"laziergit.app/Contents/MacOS/laziergit"
   end
 
