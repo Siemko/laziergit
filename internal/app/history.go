@@ -321,9 +321,15 @@ func (a *App) commitDetail(c *ui.Context, pal *palette) {
 			ui.Avatar(c, cm.AuthorName, nil).FontSize(14).Shrink(0)
 			ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Baseline).MinWidth(0).Children(func() {
-					ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(0).MaxWidth(280).
+					withEmail := a.detailW <= 0 || a.detailW >= 560
+					name := ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().MaxWidth(280).
 						Tooltip(cm.AuthorName + " <" + cm.AuthorEmail + ">")
-					if a.detailW <= 0 || a.detailW >= 560 {
+					if withEmail {
+						name.Shrink(0) // whole, the email giving way
+					} else {
+						name.Shrink(1).MinWidth(0) // alone, it ends in an ellipsis rather than overflow
+					}
+					if withEmail {
 						ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
 					}
 				})
