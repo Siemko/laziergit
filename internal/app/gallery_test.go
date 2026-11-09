@@ -104,6 +104,11 @@ func (g *gallery) views(w, h int, dark bool) {
 				"/Users/ada/code/engine",
 				"/Users/ada/Developer/clients/northwind-traders/monorepo-with-a-rather-long-name",
 				"/Users/ada/code/notes",
+				"/Users/ada/code/website",
+				"/Users/ada/code/dotfiles",
+				"/Users/ada/Developer/oss/mygo",
+				"/Users/ada/Developer/oss/lazygit",
+				"/Users/ada/code/scratch",
 			}
 		},
 	}, core.Options{})
@@ -166,11 +171,12 @@ func (g *gallery) views(w, h int, dark bool) {
 	tt.Key(ui.Cmd, ui.KeyK)
 	tt.Type("sta")
 	g.shot("palette")
+	tt.Type("zzz")
+	g.shot("palette-empty")
 	tt.Key(0, ui.KeyEscape)
 	a.palette = false
 
-	a.confirm("Discard changes to src/components/dashboard/widgets/PerformanceMetricsChartWithAnnotations.tsx?",
-		"Its changes are lost, which can't be undone.", "Discard", func() {})
+	a.confirmDiscard(a.selectedFile())
 	g.shot("confirm")
 	a.dialog = nil
 	a.prompt("New branch from main", "feature/", "Create", false, func(string) {})
@@ -181,6 +187,13 @@ func (g *gallery) views(w, h int, dark bool) {
 	a.dialog.onCancel()
 	<-answer
 	a.dialog = nil
+
+	// A long branch checked out, and the list dragged narrow.
+	git(t, dir, "checkout", "-q", "-b", "feature/JIRA-67890-rework-the-export-dialog-column-picker-and-csv-options")
+	a.refresh(false)
+	a.listW = 280
+	g.shot("long-branch-narrow-list")
+	a.listW = 380
 
 	a.toast("Pushed", "main to origin/main")
 	a.toastErr(fmt.Errorf("git push: ! [rejected] main -> main (fetch first)\nerror: failed to push some refs to 'github.com:ada/engine.git'\nhint: Updates were rejected because the remote contains work that you do not have locally."))
@@ -199,9 +212,7 @@ func (g *gallery) views(w, h int, dark bool) {
 	g.tt.Frame()
 	g.tt.Key(ui.Shift, ui.KeyM)
 	g.tt.Frame()
-	if err := g.tt.Click("Merge"); err != nil {
-		t.Fatal(err)
-	}
+	g.tt.Key(0, ui.KeyEnter)
 	g.shot("conflicts")
 	c.Close()
 }

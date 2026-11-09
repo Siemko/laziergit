@@ -223,10 +223,10 @@ func (a *App) conflictPane(c *ui.Context, pal *palette, f *models.File) {
 			a.undoConflict(f)
 		}
 		if a.detailW >= 620 {
-			if ui.Button(c, "All Current").Disabled(n == 0).Tooltip("Keep the current side of every conflict").Clicked() {
+			if headerButton(c, "All Current").Disabled(n == 0).Tooltip("Keep the current side of every conflict").Clicked() {
 				a.resolveConflict(f, -1, core.PickOurs)
 			}
-			if ui.Button(c, "All Incoming").Disabled(n == 0).Tooltip("Keep the incoming side of every conflict").Clicked() {
+			if headerButton(c, "All Incoming").Disabled(n == 0).Tooltip("Keep the incoming side of every conflict").Clicked() {
 				a.resolveConflict(f, -1, core.PickTheirs)
 			}
 			return
@@ -261,17 +261,24 @@ func (a *App) conflictPane(c *ui.Context, pal *palette, f *models.File) {
 			a.conflictFold(c, pal, it)
 		default:
 			for l := it.from; l < it.to; l++ {
-				a.codeLine(c, pal, v, l, ui.Color{})
+				a.codeLine(c, pal, v, l, ui.Color{}, false)
 			}
 		}
-	}).Grow(1).Padding(0, 0, 12, 0).FocusBind(&a.pane, paneDiff).Label("Conflicts")
+	}).Grow(1).Padding(0, 0, 12, 0).FocusBind(&a.pane, paneDiff).FocusRing(false).Label("Conflicts")
 }
 
-func (a *App) codeLine(c *ui.Context, pal *palette, v *conflictView, line int, bg ui.Color) {
+// codeLine is a line of the file: cut to the pane, or whole, in a side of
+// a conflict, which scrolls sideways so that no difference is cut off.
+func (a *App) codeLine(c *ui.Context, pal *palette, v *conflictView, line int, bg ui.Color, whole bool) {
 	ui.Row(c).Height(20).AlignItems(ui.Center).Background(bg).Children(func() {
 		ui.Text(c, fmt.Sprint(line+1)).Width(44).Shrink(0).TextAlign(ui.End).Padding(0, 10, 0, 0).
 			Font(codeFont).FontSize(11).TextColor(pal.muted)
-		ui.RichText(c, v.spans[line]...).Font(codeFont).FontSize(12).SingleLine().Shrink(1).MinWidth(0)
+		code := ui.RichText(c, v.spans[line]...).Font(codeFont).FontSize(12).SingleLine()
+		if whole {
+			code.Shrink(0).Padding(0, 12, 0, 0)
+		} else {
+			code.Shrink(1).MinWidth(0)
+		}
 	})
 }
 
@@ -300,11 +307,11 @@ func (a *App) conflictCard(c *ui.Context, pal *palette, f *models.File, i int) {
 	cur, _ := v.current()
 	chosen := cur.conflict == i
 	focused := a.pane == paneDiff
-	border := pal.border
-	if chosen {
-		border = tt.Accent.Alpha(0.7)
+	border, width := pal.border, float32(1)
+	if chosen && focused {
+		border, width = tt.Accent.Alpha(0.7), 1.5
 	}
-	ui.Column(c).Margin(8, 12, 8, 12).Radius(10).Border(1.5, border).Clip().Background(tt.Background).Children(func() {
+	ui.Column(c).Margin(8, 12, 8, 12).Radius(10).Border(width, border).Clip().Background(tt.Background).Children(func() {
 		ui.Row(c).Height(34).Padding(0, 10, 0, 14).Gap(8).AlignItems(ui.Center).Background(pal.pill).Children(func() {
 			ui.Icon(c, iconWarning).FontSize(13).TextColor(pal.conflict)
 			ui.Textf(c, "Conflict %d of %d", i+1, len(v.file.Conflicts)).FontSize(12).FontWeight(600)
@@ -316,7 +323,7 @@ func (a *App) conflictCard(c *ui.Context, pal *palette, f *models.File, i int) {
 		side := func(pick core.Pick, title, label string, color ui.Color, from, to int) {
 			sel := chosen && cur.pick == pick
 			head := ui.Row(c.Key(fmt.Sprint("side", pick))).Height(30).Padding(0, 10, 0, 14).Gap(8).AlignItems(ui.Center).
-				BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(color.Alpha(0.10))
+				BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(color.Alpha(0.08))
 			head.Children(func() {
 				ui.Box(c).Size(8, 8).Radius(4).Background(color)
 				ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(color)
@@ -327,7 +334,7 @@ func (a *App) conflictCard(c *ui.Context, pal *palette, f *models.File, i int) {
 				if sel && focused {
 					ui.Text(c, "space").Font(codeFont).FontSize(10).Padding(1, 5).Radius(4).Background(pal.pill).TextColor(pal.muted)
 				}
-				if smallButton(c, pal, "Accept "+title, sel).Clicked() {
+				if smallButton(c, pal, "Accept "+title, sel && focused).Clicked() {
 					a.resolveConflict(f, i, pick)
 				}
 			})
@@ -339,17 +346,19 @@ func (a *App) conflictCard(c *ui.Context, pal *palette, f *models.File, i int) {
 					}
 				}
 			}
-			bg := color.Alpha(0.06)
+			bg := color.Alpha(0.04)
 			if sel {
-				bg = color.Alpha(0.16)
+				bg = color.Alpha(0.11)
 			}
-			ui.Column(c).Padding(4, 0).Background(bg).Children(func() {
-				if from == to {
-					ui.Text(c, "(nothing)").FontSize(11).TextColor(pal.muted).Padding(2, 54)
-				}
-				for l := from; l < to; l++ {
-					a.codeLine(c, pal, v, l, ui.Color{})
-				}
+			ui.ScrollHorizontal(c.Key(fmt.Sprint("code", pick))).Background(bg).Children(func() {
+				ui.Column(c).Padding(4, 0).Grow(1).Children(func() {
+					if from == to {
+						ui.Text(c, "(nothing)").FontSize(11).TextColor(pal.muted).Padding(2, 54)
+					}
+					for l := from; l < to; l++ {
+						a.codeLine(c, pal, v, l, ui.Color{}, true)
+					}
+				})
 			})
 		}
 		of, ot := cf.Ours()

@@ -41,6 +41,9 @@ func listIn(c *ui.Context, hot bool, build func()) {
 		pal := paletteFor(&th)
 		th.Accent = pal.selected.Over(pal.pane)
 		th.AccentText = th.Text
+		// The same gray in a window in the background, rather than the
+		// theme's darker inactive accent.
+		th.InactiveAccent = th.Accent
 	}
 	ui.Themed(c, &th).Background(ui.Transparent).Grow(1).MinHeight(0).Children(build)
 }
@@ -71,7 +74,7 @@ func fitPath(c *ui.Context, path string, width, size float32, weight int) string
 // whose background is the accent.
 func tint(sel bool, tt *ui.Theme, col ui.Color) ui.Color {
 	if sel {
-		return tt.AccentText.Alpha(0.82)
+		return tt.AccentText.Alpha(0.92)
 	}
 	return col
 }

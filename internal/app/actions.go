@@ -318,8 +318,18 @@ func (a *App) paletteView(c *ui.Context, pal *palette) {
 			acts[i].run()
 		}
 	}
-	ui.Modal(c, &a.palette, func() {
-		ui.Column(c).Width(520).Gap(8).Children(func() {
+	tt := c.Theme()
+	ui.DialogBase(c, &a.palette, func(back, panel ui.Element) {
+		bg := pal.raised
+		scrim := ui.RGBA(0, 0, 0, 0.18)
+		if tt.Dark {
+			scrim = ui.RGBA(0, 0, 0, 0.45)
+		}
+		_, h := c.Size()
+		back.Background(scrim).Justify(ui.Start).Padding(min(120, h*0.16), 0, 0, 0)
+		panel.Padding(8).Radius(12).Background(bg).Border(1, pal.border).Shadow(0, 18, 48, 0, ui.RGBA(0, 0, 0, 0.25))
+		w, _ := c.Size()
+		ui.Column(c).Width(min(560, w-64)).Gap(6).Children(func() {
 			field := ui.SearchField(c.Key("query"), &a.query).Placeholder("Type a command").AutoFocus()
 			if field.Changed() {
 				a.paletteSel = 0
@@ -339,17 +349,27 @@ func (a *App) paletteView(c *ui.Context, pal *palette) {
 			list := ui.List(c.Key("commands"), &a.paletteLst, len(acts), func(i int) {
 				act := acts[i]
 				sel := i == a.paletteSel
-				ui.Row(c).Height(30).Padding(0, 10).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, act.title).FontSize(13).Grow(1).SingleLine()
+				ui.Row(c).Height(32).Padding(0, 10).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, act.title).FontSize(13).Grow(1).Shrink(1).MinWidth(0).SingleLine()
 					if act.keyName != "" {
-						ui.Text(c, act.keyName).Font(codeFont).FontSize(11).TextColor(tint(sel, c.Theme(), pal.muted)).Padding(1, 6).Radius(4).Background(pal.pill)
+						cap := ui.Text(c, act.keyName).Font(codeFont).FontSize(11).Padding(1, 6).Radius(4).Shrink(0)
+						if sel {
+							cap.TextColor(c.Theme().AccentText).Background(c.Theme().AccentText.Alpha(0.2))
+						} else {
+							cap.TextColor(pal.muted).Background(pal.pill)
+						}
 					}
 				})
-			}).Height(min(float32(len(acts)), 10)*30 + 4).Children(func() {
-				if len(acts) == 0 {
-					ui.Text(c, "No matching commands").TextColor(pal.muted).Padding(10)
-				}
 			})
+			if len(acts) == 0 {
+				list.Height(48).Children(func() {
+					ui.Column(c).Fill().Center().Children(func() {
+						ui.Text(c, "No matching commands").FontSize(12).TextColor(pal.muted)
+					})
+				})
+			} else {
+				list.Height(min(float32(len(acts)), 10)*32 + 4)
+			}
 			if list.Submitted() {
 				runChosen(a.paletteSel)
 			}

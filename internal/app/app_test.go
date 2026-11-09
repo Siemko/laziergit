@@ -322,9 +322,8 @@ func TestResolveConflicts(t *testing.T) {
 	tt.Frame()
 	tt.Key(ui.Shift, ui.KeyM)
 	tt.Frame()
-	if err := tt.Click("Merge"); err != nil {
-		t.Fatal(err)
-	}
+	// The confirmation's button has the focus: Return merges.
+	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
 	f := a.selectedFile()
 	if a.section != secChanges || f == nil || f.Path != "greeting.go" || !f.HasInlineMergeConflicts {

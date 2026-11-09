@@ -285,7 +285,7 @@ func (a *App) stagingPane(c *ui.Context, pal *palette, f *models.File, staged bo
 	n := len(s.lines) - s.first
 	ui.List(c.Key("patch"), &s.list, n, func(i int) {
 		a.patchRow(c, pal, f, staged, s.first+i)
-	}).Grow(1).RowWidth(s.rowWidth).FocusBind(&a.pane, paneDiff).Label("Diff lines")
+	}).Grow(1).RowWidth(s.rowWidth).FocusBind(&a.pane, paneDiff).FocusRing(false).Label("Diff lines")
 	a.selectionBar(c, pal, f, staged)
 }
 
@@ -300,27 +300,35 @@ func (a *App) patchRow(c *ui.Context, pal *palette, f *models.File, staged bool,
 	lo, hi := s.bounds()
 	chosen := l.IsChange() && i >= lo && i <= hi
 	focused := a.pane == paneDiff
+	// The diff's colors are the DiffView's: its hues, mixed as it mixes.
+	et := editor.DefaultTheme(tt)
+	base := tt.Background
+	line, gutter := float32(0.12), float32(0.2)
+	if tt.Dark {
+		line, gutter = 0.2, 0.3
+	}
 	var bg, numBg, mark ui.Color
+	numColor := pal.muted
 	sign := " "
 	switch l.Kind {
 	case patch.ADDITION:
-		bg, numBg, mark, sign = pal.added.Alpha(0.11), pal.added.Alpha(0.17), pal.added, "+"
+		bg, numBg, mark, sign = base.MixOklab(et.Added, line), base.MixOklab(et.Added, gutter), et.Added, "+"
 	case patch.DELETION:
-		bg, numBg, mark, sign = pal.deleted.Alpha(0.11), pal.deleted.Alpha(0.17), pal.deleted, "−"
+		bg, numBg, mark, sign = base.MixOklab(et.Deleted, line), base.MixOklab(et.Deleted, gutter), et.Deleted, "−"
 	}
 	if chosen {
-		alpha := float32(0.16)
-		if focused {
-			alpha = 0.26
+		// Chosen lines keep their color: their gutter fills with it.
+		numBg, numColor = mark, ui.RGB(255, 255, 255)
+		if !focused {
+			numBg = mark.Alpha(0.55).Over(base)
 		}
-		bg, numBg = tt.Accent.Alpha(alpha), tt.Accent.Alpha(alpha+0.08)
 	}
 	num := func(n int, show bool) {
 		text := ""
 		if show {
 			text = fmt.Sprint(n)
 		}
-		ui.Text(c, text).Width(s.numW).Shrink(0).TextAlign(ui.End).Padding(0, 6, 0, 0).Font(codeFont).FontSize(11).TextColor(pal.muted)
+		ui.Text(c, text).Width(s.numW).Shrink(0).TextAlign(ui.End).Padding(0, 6, 0, 0).Font(codeFont).FontSize(11).TextColor(numColor)
 	}
 	row := ui.Row(c).Height(20).AlignItems(ui.Stretch).Background(bg).Children(func() {
 		ui.Row(c).Shrink(0).AlignItems(ui.Center).Background(numBg).Children(func() {
@@ -408,7 +416,7 @@ func (a *App) hunkHeader(c *ui.Context, pal *palette, f *models.File, staged boo
 func (a *App) selectionBar(c *ui.Context, pal *palette, f *models.File, staged bool) {
 	s := &a.stage
 	n := len(s.chosen())
-	ui.Row(c).Height(40).Shrink(0).Padding(0, 12).Gap(8).AlignItems(ui.Center).
+	ui.Row(c).Height(50).Shrink(0).Padding(0, 12).Gap(8).AlignItems(ui.Center).
 		BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(pal.header).Children(func() {
 		label := plural(n, "line")
 		if s.sticky {
@@ -425,7 +433,7 @@ func (a *App) selectionBar(c *ui.Context, pal *palette, f *models.File, staged b
 		if staged {
 			verb = "Unstage Lines"
 		}
-		if ui.PrimaryButton(c, verb).Disabled(n == 0).Tooltip(verb + " (space)").Clicked() {
+		if defaultButton(c, verb, n > 0).Tooltip(verb + " (space)").Clicked() {
 			a.applyChosen(f, staged, false)
 		}
 	})

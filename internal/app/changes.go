@@ -48,7 +48,7 @@ func (a *App) changesList(c *ui.Context, pal *palette) {
 		if len(files) > 0 && staged == len(files) {
 			label = "Unstage All"
 		}
-		if ui.Button(c, label).Disabled(len(files) == 0).Tooltip(label + " (a)").Clicked() {
+		if headerButton(c, label).Disabled(len(files) == 0).Tooltip(label + " (a)").Clicked() {
 			a.toggleAll()
 		}
 	})
@@ -60,7 +60,7 @@ func (a *App) changesList(c *ui.Context, pal *palette) {
 	listIn(c, hot, func() {
 		list = ui.List(c.Key("files"), &a.filesList, len(files), func(i int) {
 			a.fileRow(c, pal, files[i], hot && i == a.fileSel)
-		}).Grow(1).FocusBind(&a.pane, paneList).Children(func() {
+		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneList).FocusRing(false).Children(func() {
 			if len(files) == 0 {
 				emptyState(c, pal, iconCheck, "Working tree clean", "Nothing to commit.")
 			}
@@ -76,35 +76,41 @@ func (a *App) fileRow(c *ui.Context, pal *palette, f *models.File, sel bool) {
 	tt := c.Theme()
 	letter, color := statusLetter(pal, f)
 	color = tint(sel, tt, color)
-	dir, name := path.Split(f.Path)
-	ui.Row(c).Height(rowHeight).Padding(0, 10, 0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(rowHeight).Padding(0, 2, 0, 8).Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, letter).Font(codeFont).FontSize(11).FontWeight(700).TextColor(color).Width(14).TextAlign(ui.Center)
-		ui.Row(c).Gap(6).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Baseline).Children(func() {
-			ui.Text(c, name).FontSize(13).SingleLine().Shrink(0)
-			if dir != "" {
-				ui.Text(c, strings.TrimSuffix(dir, "/")).FontSize(11).TextColor(tint(sel, tt, pal.muted)).SingleLine().Shrink(1).MinWidth(0)
+		fileName(c, pal, tt, f.Path, sel, 13)
+		// The staged state: a check when all is staged, a bar when some.
+		// It has a slot of its own, that the name never runs under.
+		conflicted := f.HasUnstagedChanges && f.HasInlineMergeConflicts
+		if conflicted {
+			// Staged as its conflicts are resolved, not by hand.
+			ui.Box(c).Size(24, 24).Shrink(0)
+			return
+		}
+		slot := ui.ButtonBase(c.Key("stage")).Size(24, 24).Shrink(0).Center().Label("Toggle staged").Tooltip("Stage / unstage (space)")
+		hovered := slot.Hovered()
+		slot.Children(func() {
+			box := ui.Box(c).Size(16, 16).Radius(4).Center()
+			// The window's accent, though the list shows its choice in
+			// gray; on the blue of a row chosen, ringed in white.
+			white := ui.RGB(255, 255, 255)
+			switch {
+			case f.HasStagedChanges && !f.HasUnstagedChanges:
+				box.Background(a.accent).TextColor(white).Children(func() { ui.Icon(c, iconCheck).FontSize(11) })
+			case f.HasStagedChanges:
+				box.Background(a.accent).Children(func() { ui.Box(c).Size(8, 2).Radius(1).Background(white) })
+			default:
+				border := tt.Border.Mix(tt.Text, 0.3)
+				if hovered {
+					border = a.accent
+				}
+				box.Background(t(c).Background).Border(1, border)
+			}
+			if sel && f.HasStagedChanges {
+				box.Border(1, white.Alpha(0.8))
 			}
 		})
-		// The staged state: a check when all is staged, a dash when some.
-		conflicted := f.HasUnstagedChanges && f.HasInlineMergeConflicts
-		box := ui.ButtonBase(c.Key("stage")).Size(16, 16).Radius(4).Center().Label("Toggle staged").Tooltip("Stage / unstage (space)")
-		if conflicted {
-			box.Disabled(true).Tooltip("Resolve its conflicts to stage it")
-		}
-		// The window's accent, though the list shows its choice in gray.
-		fill, mark := a.accent, ui.RGB(255, 255, 255)
-		if sel {
-			fill, mark = tt.AccentText, tt.Accent
-		}
-		switch {
-		case f.HasStagedChanges && !f.HasUnstagedChanges:
-			box.Background(fill).TextColor(mark).Children(func() { ui.Icon(c, iconCheck).FontSize(11) })
-		case f.HasStagedChanges:
-			box.Background(fill.Alpha(0.55)).TextColor(mark).Children(func() { ui.Text(c, "–").FontSize(11).Bold() })
-		default:
-			box.Border(1.2, tint(sel, tt, pal.muted))
-		}
-		if box.Clicked() && !conflicted {
+		if slot.Clicked() {
 			a.run("Staging…", func(r *core.Repo) error { return r.ToggleStaged(f) })
 		}
 	}).ContextMenu(func(m *ui.Menu) {
@@ -134,11 +140,7 @@ func (a *App) confirmDiscard(f *models.File) {
 		})
 		return
 	}
-	msg := "Its changes are lost; this can't be undone."
-	if dir, _ := path.Split(f.Path); dir != "" {
-		msg = "In " + strings.TrimSuffix(dir, "/") + ". " + msg
-	}
-	a.confirm("Discard changes to "+path.Base(f.Path)+"?", msg, "Discard", func() {
+	a.confirm("Discard changes?", f.Path+"\n\nIts changes are lost; this can't be undone.", "Discard", func() {
 		a.run("Discarding…", func(r *core.Repo) error { return r.Discard(f) })
 	})
 }
@@ -153,17 +155,20 @@ func (a *App) composer(c *ui.Context, pal *palette) {
 		}
 	}
 	ui.Column(c).Shrink(0).Padding(12).Gap(8).BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(tt.Background).Children(func() {
-		ui.TextInput(c.Key("summary"), &a.summary).Placeholder("Summary (c)").Label("Commit summary").FocusBind(&a.pane, paneSummary)
+		ui.TextInput(c.Key("summary"), &a.summary).Placeholder("Summary").Label("Commit summary").Tooltip("Commit summary (c)").
+			FocusBind(&a.pane, paneSummary)
 		ui.TextArea(c.Key("description"), &a.description).Placeholder("Description").Label("Commit description").Height(64).
 			FocusBind(&a.pane, paneDescription)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Checkbox(c, &a.amend, "Amend last commit")
+		// The button goes below the check box where the two don't fit side
+		// by side, rather than being cut off.
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Justify(ui.End).Children(func() {
+			ui.Checkbox(c, &a.amend, "Amend last commit").FontSize(12)
 			ui.Spacer(c)
 			label := "Commit"
 			if a.amend {
 				label = "Amend"
 			}
-			if ui.PrimaryButton(c, label).Disabled(!staged && !a.amend || a.summary == "" && !a.amend).
+			if defaultButton(c, label, !(!staged && !a.amend || a.summary == "" && !a.amend)).
 				Tooltip(label + " (⌘↩)").Clicked() {
 				a.commit()
 			}
@@ -245,4 +250,26 @@ func conflictKind(status string) string {
 		return "deleted by both"
 	}
 	return "changed by both"
+}
+
+// fileName is a file's name and, smaller, its folder: the name keeps its
+// room as the row narrows, the folder giving way first, both ending in an
+// ellipsis rather than running under what is beside them.
+func fileName(c *ui.Context, pal *palette, tt *ui.Theme, p string, sel bool, size float32) {
+	dir, name := path.Split(p)
+	row := ui.Row(c.Key("name")).Gap(6).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Baseline).Clip().Tooltip(p)
+	// The folder shows where a useful part of it fits beside the name.
+	if room := row.Bounds().W; room > 0 && dir != "" {
+		nameW, _ := c.MeasureText(0, ui.Span{Text: name, Size: size})
+		if room-nameW-6 < 36 {
+			dir = ""
+		}
+	}
+	row.Children(func() {
+		ui.Text(c, name).FontSize(size).SingleLine().Shrink(1).MinWidth(min(48, size*4))
+		if dir != "" {
+			ui.Text(c, strings.TrimSuffix(dir, "/")).FontSize(size - 2).TextColor(tint(sel, tt, pal.muted)).
+				SingleLine().Shrink(1000).MinWidth(0)
+		}
+	})
 }

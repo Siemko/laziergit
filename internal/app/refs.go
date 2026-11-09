@@ -21,7 +21,7 @@ func (a *App) selectedBranch() *models.Branch {
 func (a *App) branchList(c *ui.Context, pal *palette) {
 	branches := a.snap.Branches
 	paneHeader(c, pal, plural(len(branches), "local branch"), func() {
-		if ui.Button(c, "New Branch…").Tooltip("New branch (n)").Clicked() {
+		if headerButton(c, "New Branch…").Tooltip("New branch (n)").Clicked() {
 			a.newBranch()
 		}
 	})
@@ -33,7 +33,7 @@ func (a *App) branchList(c *ui.Context, pal *palette) {
 	listIn(c, hot, func() {
 		list = ui.List(c.Key("branches"), &a.branchesList, len(branches), func(i int) {
 			a.branchRow(c, pal, branches[i], hot && i == a.branchSel)
-		}).Grow(1).FocusBind(&a.pane, paneList)
+		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneList).FocusRing(false)
 	})
 	if list.Submitted() {
 		a.pane = paneFiles // into the branch's commits, as lazygit's Enter
@@ -131,7 +131,7 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 					ui.Text(c, "HEAD").FontSize(10).FontWeight(700).TextColor(tt.AccentText).Padding(2, 6).Radius(4).Background(tt.Accent).Shrink(0)
 				}
 			})
-			info := "Not published: Push publishes it"
+			info := "Not published"
 			if b.IsTrackingRemote() {
 				info = fmt.Sprintf("Tracks %s/%s · ↑%s ↓%s", b.UpstreamRemote, b.UpstreamBranch, orZero(b.AheadForPull), orZero(b.BehindForPull))
 			}
@@ -140,17 +140,22 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 			}
 			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine().Padding(0, 0, 0, 28)
 		})
-		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if ui.PrimaryButton(c, "Checkout").Disabled(b.Head).Clicked() {
+		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Padding(0, 0, 0, 28).Children(func() {
+			if defaultButton(c, "Checkout", !b.Head).Height(24).Padding(0, 10).FontSize(12).Clicked() {
 				a.checkout(b)
 			}
-			if ui.Button(c, "Merge into "+a.headName()).Disabled(b.Head).Clicked() {
+			if headerButton(c, "Merge").Disabled(b.Head).Tooltip("Merge " + b.Name + " into " + a.headName() + " (M)").Clicked() {
 				a.merge(b)
 			}
-			if ui.Button(c, "Rebase "+a.headName()+" onto it").Disabled(b.Head).Clicked() {
+			if headerButton(c, "Rebase").Disabled(b.Head).Tooltip("Rebase " + a.headName() + " onto " + b.Name + " (r)").Clicked() {
 				a.rebaseOnto(b)
 			}
-			if ui.Button(c, "Delete…").Disabled(b.Head).Clicked() {
+			ui.Spacer(c)
+			del := headerButton(c, "Delete…").Disabled(b.Head).Tooltip("Delete the branch (d)")
+			if !b.Head {
+				del.TextColor(t(c).Danger)
+			}
+			if del.Clicked() {
 				a.deleteBranch(b)
 			}
 		})
@@ -168,7 +173,7 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 	hot := a.hot(c, paneFiles)
 	listIn(c, hot, func() {
 		ui.List(c.Key("branchCommits"), &a.branchCommitsList, len(commits), func(i int) {
-			a.commitRow(c, pal, commits[i], graph[i], gw, i == a.branchCommitSel, hot).ContextMenu(func(m *ui.Menu) {
+			a.commitRow(c, pal, commits[i], graph[i], gw, i == a.branchCommitSel, hot, a.detailW).ContextMenu(func(m *ui.Menu) {
 				a.branchCommitSel = i
 				if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
 					a.toggleCopy(b.Name, commits, i)
@@ -177,7 +182,7 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 					a.pasteCopied()
 				}
 			})
-		}).Grow(1).FocusBind(&a.pane, paneFiles).Label("Branch commits")
+		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneFiles).FocusRing(false).Label("Branch commits")
 	})
 }
 
@@ -272,7 +277,7 @@ func (a *App) selectedStash() *models.StashEntry {
 func (a *App) stashListView(c *ui.Context, pal *palette) {
 	entries := a.snap.Stash
 	paneHeader(c, pal, plural(len(entries), "stash"), func() {
-		if ui.Button(c, "Stash Changes").Disabled(len(a.snap.Files) == 0).Tooltip("Stash all changes (s)").Clicked() {
+		if headerButton(c, "Stash Changes").Disabled(len(a.snap.Files) == 0).Tooltip("Stash all changes (s)").Clicked() {
 			a.stashAll()
 		}
 	})
@@ -287,7 +292,7 @@ func (a *App) stashListView(c *ui.Context, pal *palette) {
 			tt := c.Theme()
 			ui.Row(c).Height(rowHeight+4).Padding(0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
 				branch, msg := stashParts(e.Name)
-				ui.Text(c, e.RefName()).Font(codeFont).FontSize(11).TextColor(tint(sel, tt, pal.hash)).Shrink(0)
+				ui.Text(c, e.RefName()).Font(codeFont).FontSize(11).TextColor(tint(sel, tt, pal.muted)).Shrink(0)
 				ui.Text(c, msg).FontSize(13).SingleLine().Shrink(1).MinWidth(0).Tooltip(e.Name)
 				ui.Spacer(c)
 				if branch != "" {
@@ -306,7 +311,7 @@ func (a *App) stashListView(c *ui.Context, pal *palette) {
 					a.stashDrop(e)
 				}
 			})
-		}).Grow(1).FocusBind(&a.pane, paneList).Children(func() {
+		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneList).FocusRing(false).Children(func() {
 			if len(entries) == 0 {
 				emptyState(c, pal, iconStash, "No stashes", "Stash changes to set them aside.")
 			}
@@ -326,10 +331,20 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 		files, err := repo.StashFiles(e)
 		return files, "", err
 	})
-	ui.Row(c).Padding(12, 16).Gap(12).AlignItems(ui.Center).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
+	// Narrow, the buttons go below the message rather than squeeze it.
+	stacked := a.detailW > 0 && a.detailW < 440
+	head := ui.Row(c)
+	if stacked {
+		head = ui.Column(c)
+	}
+	head.Padding(14, 16).Gap(12).AlignItems(ui.Center).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
 		branch, msg := stashParts(e.Name)
-		ui.Column(c).Gap(3).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-			ui.Text(c, msg).FontSize(14).Bold().MaxLines(2).Selectable()
+		text := ui.Column(c).Gap(3).Grow(1).Shrink(1).MinWidth(0)
+		if stacked {
+			text.AlignSelf(ui.Stretch)
+		}
+		text.Children(func() {
+			ui.Text(c, msg).FontSize(14).FontWeight(600).MaxLines(3).Selectable()
 			info := e.RefName()
 			if branch != "" {
 				info += " · on " + branch
@@ -339,12 +354,18 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 			}
 			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine()
 		})
-		if ui.Button(c, "Apply").Clicked() {
-			a.run("Applying…", func(r *core.Repo) error { return r.StashApply(e) })
+		buttons := ui.Row(c).Gap(8).Shrink(0)
+		if stacked {
+			buttons.AlignSelf(ui.End)
 		}
-		if ui.PrimaryButton(c, "Pop").Clicked() {
-			a.stashPop(e)
-		}
+		buttons.Children(func() {
+			if ui.Button(c, "Apply").Clicked() {
+				a.run("Applying…", func(r *core.Repo) error { return r.StashApply(e) })
+			}
+			if ui.PrimaryButton(c, "Pop").Clicked() {
+				a.stashPop(e)
+			}
+		})
 	})
 	a.filesAndDiff(c, pal, key, func(f *models.CommitFile) (string, error) { return repo.StashFileDiff(e, f) })
 }

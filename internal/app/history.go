@@ -52,9 +52,9 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 	var list ui.Element
 	listIn(c, hot, func() {
 		list = ui.List(c.Key("commits"), &a.commitsList, n, func(i int) {
-			a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, i == a.commitSel, hot).
+			a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, i == a.commitSel, hot, a.listW).
 				ContextMenu(func(m *ui.Menu) { a.commitMenu(m, i) })
-		}).Grow(1).FocusBind(&a.pane, paneList)
+		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneList).FocusRing(false)
 	})
 	if list.Submitted() {
 		a.pane = paneFiles
@@ -63,57 +63,73 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 
 // commitRow is a commit of a log: its graph, refs, subject, author, age
 // and hash, and whether it is copied to cherry-pick.
-func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []core.Pipe, gw float32, chosen, hot bool) ui.Element {
+func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []core.Pipe, gw float32, chosen, hot bool, room float32) ui.Element {
 	tt := c.Theme()
 	sel := chosen && hot
 	copied := a.isCopied(cm)
-	return ui.Row(c).Height(rowHeight).Padding(0, 10, 0, 4).Gap(6).AlignItems(ui.Center).Children(func() {
+	// In a narrow list the subject comes first: one ref and "+N", and no
+	// initials or, narrower still, hash, which the commit's details show.
+	narrow := room > 0 && room < 420
+	return ui.Row(c).Height(rowHeight).Padding(0, 8, 0, 0).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Width(gw).Height(rowHeight).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
-			drawGraphRow(p, r, row, cm, pal, tt, chosen)
+			drawGraphRow(p, r, row, cm, pal, tt, chosen, sel)
 		})
 		ui.Row(c).Gap(5).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center).Clip().Children(func() {
 			if cm.IsTODO() {
-				ui.Text(c, strings.ToLower(cm.Action.String())).Font(codeFont).FontSize(10).FontWeight(700).
+				ui.Text(c, strings.ToLower(cm.Action.String())).Font(codeFont).FontSize(11).FontWeight(600).
 					TextColor(tint(sel, tt, pal.modified)).Padding(1, 6).Radius(4).Background(pal.modified.Alpha(0.14)).Shrink(0)
 			}
 			refs := refsOf(cm)
-			shown := refs[:min(len(refs), 2)]
+			limit := 2
+			if narrow {
+				limit = 1
+			}
+			shown := refs[:min(len(refs), limit)]
 			for _, ref := range shown {
 				color := pal.renamed
 				switch ref.kind {
 				case refHead:
-					color = tt.Accent
+					color = a.accent
 				case refTag:
 					color = pal.modified
 				}
-				chip := ui.Text(c, ref.label).FontSize(10).FontWeight(600).Padding(1, 6).Radius(4).
-					SingleLine().Shrink(1).MinWidth(min(48, float32(len(ref.label))*6+12)).MaxWidth(110).Tooltip(ref.full)
+				maxW := float32(140)
+				if narrow {
+					maxW = 96
+				}
+				chip := ui.Text(c, ref.label).FontSize(11).FontWeight(600).Padding(1, 6).Radius(4).
+					SingleLine().Shrink(1).MinWidth(min(40, float32(len(ref.label))*7+12)).MaxWidth(maxW).Tooltip(ref.full)
 				if sel {
-					chip.TextColor(tt.Accent).Background(tt.AccentText.Alpha(0.9))
+					chip.TextColor(tt.AccentText).Background(tt.AccentText.Alpha(0.2))
 				} else {
-					chip.TextColor(color).Background(color.Alpha(0.13))
+					chip.TextColor(color).Background(color.Alpha(0.12))
 				}
 			}
 			if n := len(refs) - len(shown); n > 0 {
-				ui.Textf(c, "+%d", n).FontSize(10).FontWeight(600).TextColor(tint(sel, tt, pal.muted)).Shrink(0).
+				ui.Textf(c, "+%d", n).FontSize(11).FontWeight(600).TextColor(tint(sel, tt, pal.muted)).Shrink(0).
 					Tooltip(refsTooltip(refs[len(shown):]))
 			}
-			ui.Text(c, cm.Name).FontSize(13).SingleLine().Grow(1).Shrink(1).MinWidth(60)
+			ui.Text(c, cm.Name).FontSize(13).SingleLine().Grow(1).Shrink(1).MinWidth(80).Tooltip(cm.Name)
 		})
 		if copied {
-			ui.Text(c, "copied").FontSize(10).FontWeight(700).Padding(1, 6).Radius(4).Shrink(0).
-				TextColor(tint(sel, tt, pal.conflict)).Background(pal.conflict.Alpha(0.14)).Tooltip("Copied to cherry-pick (V pastes)")
+			ui.Text(c, "copied").FontSize(11).FontWeight(600).Padding(1, 6).Radius(4).Shrink(0).
+				TextColor(tint(sel, tt, a.accent)).Background(a.accent.Alpha(0.12)).Tooltip("Copied to cherry-pick (V pastes)")
 		}
-		ui.Text(c, initials(cm.AuthorName)).FontSize(10).FontWeight(600).TextColor(tint(sel, tt, pal.muted)).Tooltip(cm.AuthorName).Shrink(0)
-		ui.Text(c, relTime(cm.UnixTimestamp)).FontSize(11).TextColor(tint(sel, tt, pal.muted)).Width(30).TextAlign(ui.End).Shrink(0)
-		hash := ui.Text(c, cm.ShortHash()).Font(codeFont).FontSize(11).Shrink(0)
-		switch cm.Status {
-		case models.StatusUnpushed:
-			hash.TextColor(tint(sel, tt, pal.unpushed)).Tooltip("Not pushed")
-		case models.StatusMerged:
-			hash.TextColor(tint(sel, tt, pal.added)).Tooltip("In a main branch")
-		default:
-			hash.TextColor(tint(sel, tt, pal.hash))
+		if !narrow {
+			ui.Text(c, initials(cm.AuthorName)).FontSize(11).FontWeight(500).TextColor(tint(sel, tt, pal.muted)).Tooltip(cm.AuthorName).Shrink(0)
+		}
+		ui.Text(c, relTime(cm.UnixTimestamp)).FontSize(11).FontFeatures("tnum").TextColor(tint(sel, tt, pal.muted)).
+			Width(30).TextAlign(ui.End).Shrink(0)
+		// The hash is quiet; a commit not pushed yet says so with a dot.
+		if cm.Status == models.StatusUnpushed {
+			ui.Box(c).Size(6, 6).Radius(3).Background(tint(sel, tt, pal.modified)).Shrink(0).Tooltip("Not pushed")
+		}
+		if room > 0 && room < 340 {
+			return
+		}
+		hash := ui.Text(c, cm.ShortHash()).Font(codeFont).FontSize(11).Shrink(0).TextColor(tint(sel, tt, pal.muted))
+		if cm.Status == models.StatusMerged {
+			hash.Tooltip("In a main branch")
 		}
 	})
 }
@@ -204,10 +220,18 @@ func initials(name string) string {
 
 // drawGraphRow draws a row of the commit graph: lazygit's pipes as curves,
 // and the commit as a dot.
-func drawGraphRow(p *ui.Painter, r ui.Rect, row []core.Pipe, cm *models.Commit, pal *palette, tt *ui.Theme, sel bool) {
+func drawGraphRow(p *ui.Painter, r ui.Rect, row []core.Pipe, cm *models.Commit, pal *palette, tt *ui.Theme, sel, hot bool) {
 	x := func(col int16) float32 { return r.X + 4 + float32(col)*graphCol + graphCol/2 }
 	top, mid, bottom := r.Y, r.Y+r.H/2, r.Y+r.H
-	color := func(pp core.Pipe) ui.Color { return pal.graph[int(pp.Color)%len(pal.graph)] }
+	// A lane keeps its color: the column a pipe runs in (the side branch's,
+	// for one that curves into or out of the commit's).
+	color := func(pp core.Pipe) ui.Color {
+		lane := pp.To
+		if pp.Kind == core.Terminates {
+			lane = pp.From
+		}
+		return pal.graph[int(lane)%len(pal.graph)]
+	}
 	curve := func(x0, y0, x1, y1 float32) *ui.Path {
 		path := (&ui.Path{}).MoveTo(x0, y0)
 		if x0 == x1 {
@@ -249,6 +273,9 @@ func drawGraphRow(p *ui.Painter, r ui.Rect, row []core.Pipe, cm *models.Commit, 
 	ring := pal.pane
 	if sel {
 		ring = tt.Accent.Over(pal.pane)
+		if hot {
+			dot = tt.AccentText // white on the accent, where the lane's blue would vanish
+		}
 	}
 	if cm.IsMerge() {
 		p.FillPath((&ui.Path{}).Circle(cx, mid, 5), ring)
@@ -280,18 +307,21 @@ func (a *App) commitDetail(c *ui.Context, pal *palette) {
 		if subject == "" {
 			subject = cm.Name
 		}
-		ui.Text(c, subject).FontSize(15).Bold().Selectable()
+		ui.Text(c, subject).FontSize(15).FontWeight(600).Selectable().Margin(0, 0, 4, 0)
 		// The author, and the hash and age: side by side, or the second
 		// below the first when the pane is narrow.
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Baseline).Shrink(1).MinWidth(0).Children(func() {
-				ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(0).MaxWidth(240)
-				ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
-			})
-			ui.Spacer(c)
-			ui.Row(c).Gap(8).AlignItems(ui.Baseline).Shrink(0).Children(func() {
-				ui.Text(c, cm.Hash()[:min(12, len(cm.Hash()))]).Font(codeFont).FontSize(11).TextColor(pal.hash).Selectable()
-				ui.Text(c, ago(cm.UnixTimestamp)).FontSize(12).TextColor(pal.muted).SingleLine()
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Avatar(c, cm.AuthorName, nil).FontSize(14).Shrink(0)
+			ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Baseline).MinWidth(0).Children(func() {
+					ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(0).MaxWidth(240)
+					ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
+				})
+				ui.Row(c).Gap(6).AlignItems(ui.Baseline).Children(func() {
+					ui.Text(c, ago(cm.UnixTimestamp)).FontSize(12).TextColor(pal.muted).SingleLine()
+					ui.Text(c, "·").FontSize(12).TextColor(pal.muted)
+					ui.Text(c, cm.Hash()[:min(12, len(cm.Hash()))]).Font(codeFont).FontSize(11).TextColor(pal.muted).Selectable()
+				})
 			})
 		})
 		if body = strings.TrimSpace(body); body != "" {
@@ -336,7 +366,16 @@ func (a *App) filesAndDiff(c *ui.Context, pal *palette, key string, diff func(f 
 	// would leave the diff a sliver.
 	split, size, reset := ui.Split, &a.filesW, float32(240)
 	if a.detailW > 0 && a.detailW < 640 {
-		split, size, reset = ui.SplitVertical, &a.filesH, 150
+		// As tall as the files are, up to a few, unless the user moved the
+		// divider.
+		reset = min(150, headerHeight+float32(len(files))*26+12)
+		if a.filesHShown == 0 || a.filesH == a.filesHShown && !a.filesHMoved {
+			a.filesH = reset
+		} else {
+			a.filesHMoved = true
+		}
+		a.filesHShown = a.filesH
+		split, size = ui.SplitVertical, &a.filesH
 	}
 	split(c.Key(fmt.Sprint("files", reset)), size, func() {
 		ui.Column(c).Fill().Children(func() {
@@ -351,13 +390,11 @@ func (a *App) filesAndDiff(c *ui.Context, pal *palette, key string, diff func(f 
 					sel := hot && i == a.detailFileSel
 					tt := c.Theme()
 					letter, color := commitFileLetter(pal, f.ChangeStatus)
-					dir, name := splitPath(f.Path)
-					ui.Row(c).Height(26).Padding(0, 10).Gap(7).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, letter).Font(codeFont).FontSize(11).FontWeight(700).TextColor(tint(sel, tt, color)).Width(12)
-						ui.Text(c, name).FontSize(12).SingleLine().Shrink(0)
-						ui.Text(c, dir).FontSize(11).TextColor(tint(sel, tt, pal.muted)).SingleLine().Shrink(1).MinWidth(0)
+					ui.Row(c).Height(26).Padding(0, 8).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, letter).Font(codeFont).FontSize(11).FontWeight(700).TextColor(tint(sel, tt, color)).Width(12).Shrink(0)
+						fileName(c, pal, tt, f.Path, sel, 12)
 					})
-				}).Grow(1).FocusBind(&a.pane, paneFiles)
+				}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneFiles).FocusRing(false)
 			})
 		})
 	}, func() {
@@ -383,14 +420,6 @@ func commitFileLetter(pal *palette, status string) (string, ui.Color) {
 		return "R", pal.renamed
 	}
 	return "M", pal.modified
-}
-
-func splitPath(p string) (dir, name string) {
-	i := strings.LastIndexByte(p, '/')
-	if i < 0 {
-		return "", p
-	}
-	return p[:i], p[i+1:]
 }
 
 func (a *App) drop(i int) {

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 
 	"github.com/Siemko/laziergit/internal/core"
@@ -100,22 +102,60 @@ func (a *App) dialogs(c *ui.Context, pal *palette) {
 			d.onCancel()
 		}
 	}
-	if d.kind == dialogConfirm {
-		switch ui.AlertDialog(c, &d.open, d.title, d.message, "Cancel", d.button) {
-		case 1:
-			finish(true)
-		case 0:
-			finish(false)
-		default:
-			if !d.open {
-				finish(false)
+	tt := c.Theme()
+	panelBg := pal.raised
+	sheet := func(width float32, body func()) {
+		ui.DialogBase(c, &d.open, func(back, panel ui.Element) {
+			scrim := ui.RGBA(0, 0, 0, 0.28)
+			if tt.Dark {
+				scrim = ui.RGBA(0, 0, 0, 0.5)
 			}
+			back.Background(scrim)
+			panel.Width(width).Padding(20).Gap(12).Radius(12).Background(panelBg).Border(1, pal.border).
+				Shadow(0, 16, 40, 0, ui.RGBA(0, 0, 0, 0.22))
+			body()
+		})
+	}
+	if d.kind == dialogConfirm {
+		danger := false
+		for _, verb := range []string{"Discard", "Delete", "Drop", "Abort"} {
+			if strings.HasPrefix(d.button, verb) {
+				danger = true
+			}
+		}
+		sheet(360, func() {
+			ui.Column(c).Gap(6).Children(func() {
+				ui.Text(c, d.title).FontSize(14).FontWeight(600)
+				if d.message != "" {
+					ui.Text(c, d.message).FontSize(12).TextColor(pal.muted)
+				}
+			})
+			ui.Row(c).Gap(8).Justify(ui.End).Margin(6, 0, 0, 0).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					finish(false)
+				}
+				// What can't be undone is in red, its hover and press too.
+				th := *tt
+				if danger {
+					th.Accent = tt.Danger
+					th.AccentHover = tt.Danger.Mix(ui.RGB(0, 0, 0), 0.12)
+					th.AccentPressed = tt.Danger.Mix(ui.RGB(0, 0, 0), 0.22)
+				}
+				ui.Themed(c, &th).Background(ui.Transparent).Children(func() {
+					if ui.PrimaryButton(c, d.button).AutoFocus().Clicked() {
+						finish(true)
+					}
+				})
+			})
+		})
+		if a.dialog == d && !d.open {
+			finish(false)
 		}
 		return
 	}
-	ui.Modal(c, &d.open, func() {
-		ui.Column(c).Width(420).Gap(12).Children(func() {
-			ui.Text(c, d.title).FontSize(15).Bold()
+	sheet(420, func() {
+		ui.Column(c).Gap(12).Children(func() {
+			ui.Text(c, d.title).FontSize(14).FontWeight(600)
 			if d.message != "" {
 				ui.Text(c, d.message).FontSize(12).TextColor(pal.muted)
 			}

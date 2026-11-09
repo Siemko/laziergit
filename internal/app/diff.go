@@ -26,7 +26,7 @@ func (a *App) diffView(c *ui.Context, pal *palette, key string, load func() (str
 			})
 		})
 	}
-	ui.Column(c.Key("diff")).Grow(1).MinHeight(0).FocusBind(&a.pane, paneDiff).Children(func() {
+	ui.Column(c.Key("diff")).Grow(1).MinHeight(0).FocusBind(&a.pane, paneDiff).FocusRing(false).Children(func() {
 		if a.diff == nil {
 			msg := a.diffEmpty
 			if msg == "" {
@@ -61,11 +61,13 @@ func (a *App) setDiff(text string) {
 	d := &editor.DiffState{
 		Font:           ui.Font{Family: codeFont, Size: 12},
 		KeepScrollbars: true,
+		// No outline on brackets: the caret of a diff read is not shown.
+		Theme: &editor.Theme{MatchingBracket: ui.RGBA(0, 0, 0, 0.004)},
 	}
 	d.SetPatch(files[0])
 	a.diff, a.diffEmpty = d, ""
 }
 
 func (a *App) layoutToggle(c *ui.Context) {
-	ui.Segmented(c.Key("layout"), &a.unified, "Unified", "Split").Label("Diff layout")
+	small(c, func() { ui.Segmented(c.Key("layout"), &a.unified, "Unified", "Split").Label("Diff layout") })
 }

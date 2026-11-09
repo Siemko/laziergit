@@ -60,7 +60,7 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 			a.section = section(sel)
 		}
 	}
-	ui.Row(c).Padding(8, 10).Gap(6).Shrink(0).BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Children(func() {
+	ui.Row(c).Height(30).Padding(0, 8).Gap(4).AlignItems(ui.Center).Shrink(0).BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Children(func() {
 		if iconButton(c, iconTerminal, "Command log (⌘L)", a.logOpen).Clicked() {
 			a.logOpen = !a.logOpen
 		}
@@ -68,7 +68,16 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 			a.openFolder()
 		}
 		ui.Spacer(c)
-		ui.Text(c, "⌘K").FontSize(11).TextColor(pal.muted).Padding(2, 6).Radius(5).Background(pal.pill).Tooltip("Commands")
+		k := ui.ButtonBase(c.Key("palette")).Height(22).Padding(0, 7).Radius(5).Center().Label("Commands").Tooltip("Commands (⌘K)")
+		if k.Hovered() {
+			k.Background(pal.selected)
+		} else {
+			k.Background(pal.pill)
+		}
+		k.Children(func() { ui.Text(c, "⌘K").FontSize(11).TextColor(pal.muted) })
+		if k.Clicked() {
+			a.openPalette()
+		}
 	})
 	_ = tt
 }
@@ -82,38 +91,57 @@ func (a *App) openFolder() {
 func (a *App) toolbar(c *ui.Context, pal *palette) {
 	tt := c.Theme()
 	bar := c.TitleBar()
-	ui.Row(c).Height(titleBarHeight).Shrink(0).Padding(0, 12+bar.Right, 0, 16).Gap(8).AlignItems(ui.Center).
-		DragWindow().BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Background(pal.header).Children(func() {
+	row := ui.Row(c.Key("toolbar")).Height(titleBarHeight).Shrink(0).Padding(0, 12+bar.Right, 0, 16).Gap(8).AlignItems(ui.Center).
+		DragWindow().BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Background(pal.header)
+	// Narrow, the branch's chip takes less room, and what it tracks moves
+	// into its tooltip: the title and the buttons keep theirs.
+	w := row.Bounds().W
+	narrow := w > 0 && w < 760
+	row.Children(func() {
 		title := map[section]string{secChanges: "Changes", secHistory: "History", secBranches: "Branches", secStash: "Stashes"}[a.section]
-		ui.Text(c, title).FontSize(15).Bold().SingleLine()
+		ui.Text(c, title).FontSize(15).FontWeight(700).SingleLine().Shrink(0)
 		if s := a.snap; s != nil && s.Head != nil {
 			h := s.Head
 			name := h.Name
 			if h.DetachedHead {
 				name = h.DisplayName
 			}
-			chip(c, pal, iconBranch, name, tt.Text).Tooltip("Checked out")
+			tracking := ""
 			if h.IsTrackingRemote() {
-				sync := ""
+				tracking = "Tracks " + h.UpstreamRemote + "/" + h.UpstreamBranch
+			} else if !h.DetachedHead {
+				tracking = "Not published"
+			}
+			tip := "Checked out: " + name
+			if tracking != "" {
+				tip += "\n" + tracking
+			}
+			maxW := float32(240)
+			if w > 0 && w < 820 {
+				maxW = 160
+			}
+			chip(c, pal, iconBranch, name, tt.Text).MaxWidth(maxW).Tooltip(tip)
+			sync := ""
+			if h.IsTrackingRemote() {
 				if h.AheadForPull != "" && h.AheadForPull != "0" {
 					sync += "↑" + h.AheadForPull + " "
 				}
 				if h.BehindForPull != "" && h.BehindForPull != "0" {
 					sync += "↓" + h.BehindForPull
 				}
-				if sync != "" {
-					ui.Text(c, strings.TrimSpace(sync)).Font(codeFont).FontSize(12).TextColor(pal.modified)
-				} else {
-					ui.Text(c, "✓ "+h.UpstreamRemote+"/"+h.UpstreamBranch).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1)
-				}
-			} else if !h.DetachedHead {
-				ui.Text(c, "not published").FontSize(12).TextColor(pal.muted)
+			}
+			switch {
+			case sync != "":
+				ui.Text(c, strings.TrimSpace(sync)).FontSize(12).FontWeight(600).FontFeatures("tnum").
+					TextColor(tt.Text.Alpha(0.7)).SingleLine().Shrink(0).Tooltip("Commits to push ↑ and to pull ↓")
+			case !narrow && tracking != "":
+				ui.Text(c, tracking).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
 			}
 		}
 		if a.loading || a.busy > 0 {
-			ui.Spinner(c).Size(14, 14).Label("Working")
-			if a.doing != "" {
-				ui.Text(c, a.doing).FontSize(12).TextColor(pal.muted).SingleLine()
+			ui.Spinner(c).Size(14, 14).Label("Working").Shrink(0)
+			if a.doing != "" && !narrow {
+				ui.Text(c, a.doing).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0).MaxWidth(140)
 			}
 		}
 		ui.Spacer(c)
@@ -174,7 +202,7 @@ func (a *App) stateBanner(c *ui.Context, pal *palette) {
 		if canSkip(st) && ui.Button(c, "Skip").Tooltip("Skip the commit that stopped").Clicked() {
 			a.skipOperation()
 		}
-		if ui.PrimaryButton(c, "Continue").Disabled(conflicts > 0).Tooltip("Resolve the conflicts first").Clicked() {
+		if defaultButton(c, "Continue", conflicts == 0).Tooltip("Resolve the conflicts first").Clicked() {
 			a.continueOperation()
 		}
 		_ = tt
@@ -229,27 +257,34 @@ func (a *App) abortOperation() {
 // whole, the rest in the palette (?).
 func (a *App) statusBar(c *ui.Context, pal *palette) {
 	const pad, gap = 12, 14
-	bar := ui.Row(c.Key("statusBar")).Height(26).Shrink(0).Padding(0, pad).Gap(gap).AlignItems(ui.Center).Clip().
+	bar := ui.Row(c.Key("statusBar")).Height(30).Shrink(0).Padding(0, pad).Gap(gap).AlignItems(ui.Center).Clip().
 		BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(pal.header)
 	room := bar.Bounds().W - 2*pad
 	bar.Children(func() {
-		used := float32(0)
-		for _, h := range a.hints() {
-			kw, _ := c.MeasureText(0, ui.Span{Text: h.key, Font: codeFont, Size: 10})
+		hints := a.hints()
+		width := func(h hint) float32 {
+			kw, _ := c.MeasureText(0, ui.Span{Text: h.key, Font: codeFont, Size: 11})
 			lw, _ := c.MeasureText(0, ui.Span{Text: h.label, Size: 11})
-			w := kw + 10 + 5 + lw
-			if used > 0 {
-				w += gap
-			}
+			return kw + 10 + 5 + lw + gap
+		}
+		// The last, "? Commands", which leads to the rest, always shows.
+		last := hints[len(hints)-1]
+		used := width(last)
+		show := func(h hint) {
+			ui.Row(c).Gap(5).AlignItems(ui.Center).Shrink(0).Children(func() {
+				ui.Text(c, h.key).Font(codeFont).FontSize(11).Padding(0, 5).Radius(4).Background(pal.pill).Shrink(0)
+				ui.Text(c, h.label).FontSize(11).TextColor(pal.muted).SingleLine().Shrink(0)
+			})
+		}
+		for _, h := range hints[:len(hints)-1] {
+			w := width(h)
 			if room > 0 && used+w > room {
 				break
 			}
 			used += w
-			ui.Row(c).Gap(5).AlignItems(ui.Center).Shrink(0).Children(func() {
-				ui.Text(c, h.key).Font(codeFont).FontSize(10).Padding(1, 5).Radius(4).Background(pal.pill).Shrink(0)
-				ui.Text(c, h.label).FontSize(11).TextColor(pal.muted).SingleLine().Shrink(0)
-			})
+			show(h)
 		}
+		show(last)
 	})
 }
 
@@ -283,16 +318,19 @@ func (a *App) logView(c *ui.Context, pal *palette) {
 func chip(c *ui.Context, pal *palette, svg *ui.SVG, label string, color ui.Color) ui.Element {
 	return ui.Row(c).Gap(5).Padding(3, 9).Radius(12).Background(pal.pill).AlignItems(ui.Center).
 		TextColor(color).Shrink(1).MinWidth(0).MaxWidth(260).Children(func() {
-		ui.Icon(c, svg).FontSize(12)
-		ui.Text(c, label).FontSize(12).FontWeight(600).SingleLine()
+		ui.Icon(c, svg).FontSize(12).Shrink(0)
+		ui.Text(c, label).FontSize(12).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
 	})
 }
 
 func toolButton(c *ui.Context, pal *palette, svg *ui.SVG, label, tip string) ui.Element {
 	tt := c.Theme()
-	b := ui.ButtonBase(c.Key(label)).Height(28).Padding(0, 10).Gap(6).Radius(7).AlignItems(ui.Center).
+	b := ui.ButtonBase(c.Key(label)).Height(28).Padding(0, 10).Gap(6).Radius(6).AlignItems(ui.Center).Shrink(0).
 		TextColor(tt.Text).Label(label).Tooltip(tip)
-	if b.Hovered() {
+	switch {
+	case b.Pressed():
+		b.Background(pal.selected)
+	case b.Hovered():
 		b.Background(pal.hover)
 	}
 	b.Children(func() {
@@ -302,15 +340,78 @@ func toolButton(c *ui.Context, pal *palette, svg *ui.SVG, label, tip string) ui.
 	return b
 }
 
+// headerButton is a small button, for the bars over the panes.
+func headerButton(c *ui.Context, label string) ui.Element {
+	return ui.Button(c, label).Height(24).Padding(0, 10).FontSize(12)
+}
+
+// toasts shows the toasts as cards at the bottom right, over the status
+// bar, with an icon for their kind.
+func toasts(c *ui.Context, pal *palette) {
+	tt := c.Theme()
+	w, _ := c.Size()
+	ui.ToastViewportBase(c, func(viewport ui.Element, list []ui.Toast) {
+		// Bottom right, clear of the status bar and the action bars over
+		// it (the composer's, the selection's), over content only.
+		viewport.Padding(0, 16, 30+54+12, 16).AlignItems(ui.End).Gap(8)
+		for _, ts := range list {
+			p := ui.ToastBase(c, ts)
+			bg := pal.raised
+			icon, color := iconCheck, pal.added
+			switch ts.Type {
+			case "error":
+				icon, color = iconWarning, pal.deleted
+			case "warning":
+				icon, color = iconWarning, pal.modified
+			case "info":
+				icon, color = iconCommand, tt.Accent
+			}
+			p.Root.Row().Width(360).MaxWidth(w-32).Gap(10).Padding(11, 12, 12, 12).Radius(10).AlignItems(ui.Start).
+				Background(bg).Border(1, pal.border).Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.16))
+			p.Root.Children(func() {
+				ui.Icon(c, icon).FontSize(15).TextColor(color).Shrink(0).Margin(1, 0, 0, 0)
+				ui.Column(c).Gap(3).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+					ui.Text(c, ts.Title).FontSize(13).FontWeight(600)
+					if ts.Description != "" {
+						d := ui.Text(c, ts.Description).FontSize(12).TextColor(pal.muted).MaxLines(4).Selectable()
+						if ts.Type == "error" {
+							d.Font(codeFont).FontSize(11)
+						}
+					}
+				})
+				p.CloseButton().Size(18, 18).Radius(4).Center().Label("Close").TextColor(pal.muted).Shrink(0).
+					Children(func() { ui.Text(c, "✕").FontSize(10) })
+			})
+		}
+	})
+}
+
 func iconButton(c *ui.Context, svg *ui.SVG, tip string, on bool) ui.Element {
 	tt := c.Theme()
 	pal := paletteFor(tt)
-	b := ui.ButtonBase(c.Key(tip)).Size(28, 26).Radius(6).Center().TextColor(pal.muted).Label(tip).Tooltip(tip)
-	if on {
+	b := ui.ButtonBase(c.Key(tip)).Size(28, 24).Radius(6).Center().Shrink(0).TextColor(pal.muted).Label(tip).Tooltip(tip)
+	switch {
+	case on || b.Pressed():
 		b.Background(pal.selected).TextColor(tt.Text)
-	} else if b.Hovered() {
+	case b.Hovered():
 		b.Background(pal.hover)
 	}
 	b.Children(func() { ui.Icon(c, svg).FontSize(15) })
 	return b
+}
+
+// defaultButton is the pane's main action: in the accent while it can be
+// done, a plain button while it can't, as AppKit's default button.
+func defaultButton(c *ui.Context, label string, enabled bool) ui.Element {
+	if enabled {
+		return ui.PrimaryButton(c.Key(label), label)
+	}
+	return ui.Button(c.Key(label), label).Disabled(true)
+}
+
+// small builds controls at the small size, for the bars over the panes.
+func small(c *ui.Context, build func()) {
+	th := *c.Theme()
+	th.Spacing, th.FontSize = 3, 12
+	ui.Themed(c, &th).Row().AlignItems(ui.Center).Gap(6).Shrink(0).Children(build)
 }

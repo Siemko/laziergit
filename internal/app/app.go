@@ -115,11 +115,17 @@ type App struct {
 	conflicts conflictView
 	// accent is the window's, which lists without the keys show gray.
 	accent ui.Color
+	// listPref is the list's width as the user chose it, listShown the
+	// one shown, held to the room there is, and bodyW the room, the frame
+	// before.
+	listPref, listShown, bodyW float32
 	// detailW is the detail pane's width, the frame before: narrow, its
 	// parts stack or fold.
 	detailW float32
-	// filesH is the height of a commit's files over its diff, stacked.
-	filesH float32
+	// filesH is the height of a commit's files over its diff, stacked;
+	// filesHShown the one shown, and filesHMoved whether the user moved it.
+	filesH, filesHShown float32
+	filesHMoved         bool
 	// jobs are the actions asked for, the first running while running.
 	jobs    []job
 	running bool
@@ -435,6 +441,7 @@ func (a *App) View(c *ui.Context) {
 		c.AddToast(ui.Toast{Title: r.title, Description: r.desc, Type: r.kind, Timeout: timeout})
 	}
 	a.toasts = nil
+	toasts(c, pal)
 
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
@@ -446,7 +453,20 @@ func (a *App) View(c *ui.Context) {
 		return
 	}
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		ui.Column(c).Width(a.sidebarW).Shrink(0).Children(func() { a.sidebar(c, pal) })
+		// On the window's material, the sidebar's rows are tinted, not
+		// painted over it.
+		side := *t
+		if c.Vibrancy() {
+			tint := ui.RGB(0, 0, 0)
+			if t.Dark {
+				tint = ui.RGB(255, 255, 255)
+			}
+			side.SurfaceHover, side.SurfacePressed = tint.Alpha(0.05), tint.Alpha(0.09)
+			if t.Dark {
+				side.SurfaceHover, side.SurfacePressed = tint.Alpha(0.06), tint.Alpha(0.10)
+			}
+		}
+		ui.Themed(c, &side).Background(ui.Transparent).Width(a.sidebarW).Shrink(0).Children(func() { a.sidebar(c, pal) })
 		ui.Box(c).Width(1).Background(pal.border)
 		ui.Column(c).Grow(1).MinWidth(0).Background(pal.pane).Children(func() {
 			a.toolbar(c, pal)
@@ -486,13 +506,30 @@ func (a *App) View(c *ui.Context) {
 
 func (a *App) main(c *ui.Context, pal *palette) {
 	body := func() {
-		ui.Split(c.Key("body"), &a.listW, func() {
+		// The list's width as the user left it, held to what leaves both
+		// panes room as the window narrows; double-clicking the divider
+		// resets it to a share of the window.
+		if a.listW != a.listShown {
+			a.listPref = a.listW // dragged
+		}
+		bodyW := a.bodyW
+		reset := float32(380)
+		if bodyW > 0 {
+			reset = max(300, min(420, bodyW*0.42))
+			if a.listPref <= 0 {
+				a.listPref = reset
+			}
+			a.listW = max(280, min(a.listPref, bodyW-340))
+		}
+		a.listShown = a.listW
+		split := ui.Split(c.Key("body"), &a.listW, func() {
 			ui.Column(c).Fill().Children(func() { a.listPane(c, pal) })
 		}, func() {
 			detail := ui.Column(c.Key("detailPane")).Fill().Background(t(c).Background)
 			a.detailW = detail.Bounds().W
 			detail.Children(func() { a.detailPane(c, pal) })
-		}).SplitReset(380).Grow(1).MinHeight(0)
+		}).SplitReset(reset).Grow(1).MinHeight(0)
+		a.bodyW = split.Bounds().W
 	}
 	if !a.logOpen {
 		body()
@@ -545,7 +582,7 @@ func pathHeader(c *ui.Context, pal *palette, path string, extra func()) {
 }
 
 func paneHeaderOf(c *ui.Context, pal *palette, title string, isPath bool, extra func()) {
-	ui.Row(c).Height(34).Shrink(0).Padding(0, 10, 0, 14).Gap(8).AlignItems(ui.Center).
+	ui.Row(c).Height(headerHeight).Shrink(0).Padding(0, 10, 0, 14).Gap(8).AlignItems(ui.Center).
 		BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
 		// The title takes the room the rest leaves: its width, the frame
 		// before, is what a path is fitted to.
@@ -566,10 +603,12 @@ func paneHeaderOf(c *ui.Context, pal *palette, title string, isPath bool, extra 
 
 func emptyState(c *ui.Context, pal *palette, svg *ui.SVG, title, hint string) {
 	ui.Column(c).Grow(1).Center().Gap(8).Padding(24).Children(func() {
-		ui.Icon(c, svg).FontSize(28).TextColor(pal.muted)
-		ui.Text(c, title).FontSize(13).FontWeight(600).TextColor(pal.muted)
+		ui.Icon(c, svg).FontSize(30).TextColor(pal.muted.Alpha(0.6))
+		if title != "" {
+			ui.Text(c, title).FontSize(13).FontWeight(600).TextAlign(ui.Center)
+		}
 		if hint != "" {
-			ui.Text(c, hint).FontSize(12).TextColor(pal.muted).TextAlign(ui.Center)
+			ui.Text(c, hint).FontSize(12).TextColor(pal.muted).TextAlign(ui.Center).MaxWidth(300)
 		}
 	})
 }
@@ -582,9 +621,9 @@ func (a *App) welcome(c *ui.Context, pal *palette) {
 	}
 	ui.Column(c).Fill().Background(tt.Background).Children(func() {
 		ui.Box(c).Height(titleBarHeight).Shrink(0).DragWindow()
-		ui.Column(c).Grow(1).Center().Gap(14).Padding(0, 0, titleBarHeight, 0).Children(func() {
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(14).Padding(0, 16, titleBarHeight, 16).Children(func() {
 			ui.Icon(c, iconBranch).FontSize(44).TextColor(tt.Accent)
-			ui.Text(c, "laziergit").FontSize(24).Bold()
+			ui.Text(c, "laziergit").FontSize(22).FontWeight(700)
 			ui.Text(c, "lazygit's power, as a native app.").TextColor(pal.muted)
 			if a.openErr != "" {
 				ui.Text(c, a.openErr).FontSize(12).TextColor(pal.deleted).MaxWidth(420).TextAlign(ui.Center)
@@ -595,24 +634,32 @@ func (a *App) welcome(c *ui.Context, pal *palette) {
 			if len(recent) == 0 {
 				return
 			}
-			ui.Column(c).Width(380).Margin(18, 0, 0, 0).Gap(2).Children(func() {
+			// The recent repositories scroll in the room a small window has.
+			_, h := c.Size()
+			room := float32(264)
+			if h < 640 {
+				room = 168
+			}
+			ui.Column(c).Width(380).MaxWidthPercent(100).Margin(18, 0, 0, 0).Gap(2).Shrink(1).MinHeight(0).Children(func() {
 				ui.Text(c, "Recent").FontSize(11).FontWeight(600).TextColor(pal.muted).Padding(0, 10, 4, 10)
-				for _, path := range recent[:min(len(recent), 8)] {
-					b := ui.ButtonBase(c.Key(path)).Padding(7, 10).Gap(10).Radius(7).AlignItems(ui.Center).Label(path)
-					if b.Hovered() {
-						b.Background(pal.hover)
-					}
-					b.Children(func() {
-						ui.Icon(c, iconFolder).FontSize(15).TextColor(tt.Accent)
-						ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-							ui.Text(c, filepath.Base(path)).FontSize(13).FontWeight(500).SingleLine()
-							ui.Text(c, abbreviateHome(filepath.Dir(path))).FontSize(11).TextColor(pal.muted).SingleLine()
+				ui.Scroll(c.Key("recent")).MaxHeight(room).Children(func() {
+					for _, path := range recent[:min(len(recent), 8)] {
+						b := ui.ButtonBase(c.Key(path)).Padding(7, 10).Gap(10).Radius(7).AlignItems(ui.Center).Label(path)
+						if b.Hovered() {
+							b.Background(pal.hover)
+						}
+						b.Children(func() {
+							ui.Icon(c, iconFolder).FontSize(15).TextColor(tt.Accent)
+							ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+								ui.Text(c, filepath.Base(path)).FontSize(13).FontWeight(500).SingleLine()
+								ui.Text(c, abbreviateHome(filepath.Dir(path))).FontSize(11).TextColor(pal.muted).SingleLine()
+							})
 						})
-					})
-					if b.Clicked() && a.host.OpenRecent != nil {
-						a.host.OpenRecent(path)
+						if b.Clicked() && a.host.OpenRecent != nil {
+							a.host.OpenRecent(path)
+						}
 					}
-				}
+				})
 			})
 		})
 	})
