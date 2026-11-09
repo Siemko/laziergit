@@ -76,17 +76,25 @@ func (a *App) actions() []action {
 		{title: "Reword Commit…", section: secHistory, key: ui.KeyR, keyName: "r", hint: true, enabled: commit != nil,
 			run: func() { a.reword(a.commitSel) }},
 		{title: "Fixup Into Commit Below", section: secHistory, key: ui.KeyF, keyName: "f", hint: true,
-			enabled: commit != nil && !commit.IsMerge() && a.commitSel+1 < len(s.Commits),
-			run:     func() { a.fixup(a.commitSel) }},
-		{title: "Drop Commit…", section: secHistory, key: ui.KeyD, keyName: "d", hint: true, enabled: commit != nil,
-			run: func() { a.drop(a.commitSel) }},
+			enabled: commit != nil && a.canFixupChosen(), run: a.fixupChosen},
+		{title: "Drop Commit…", section: secHistory, key: ui.KeyD, keyName: "d", hint: true, enabled: commit != nil, run: a.dropChosen},
 		{title: "Move Commit Down", section: secHistory, mods: ui.Ctrl, key: ui.KeyJ, keyName: "⌃j", hint: true, enabled: commit != nil,
-			run: func() { a.moveCommit(a.commitSel, 1) }},
+			run: func() { a.moveChosen(1) }},
 		{title: "Move Commit Up", section: secHistory, mods: ui.Ctrl, key: ui.KeyK, keyName: "⌃k", hint: true, enabled: commit != nil,
-			run: func() { a.moveCommit(a.commitSel, -1) }},
+			run: func() { a.moveChosen(-1) }},
 
 		{title: "Copy Commit (Cherry-Pick)", section: secHistory, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true, enabled: commit != nil,
-			run: func() { a.toggleCopy("HEAD", s.Commits, a.commitSel) }},
+			run: a.copyCommits},
+		{title: "Toggle Range Selection", section: secHistory, pane: paneList, key: ui.KeyV, keyName: "v", hint: true, enabled: commit != nil,
+			run: a.toggleCommitRange},
+		{title: "Extend Down", section: secHistory, pane: paneList, mods: ui.Shift, key: ui.KeyJ, keyName: "J", enabled: commit != nil,
+			run: func() { a.extendCommits(1) }},
+		{title: "Extend Up", section: secHistory, pane: paneList, mods: ui.Shift, key: ui.KeyK, keyName: "K", enabled: commit != nil,
+			run: func() { a.extendCommits(-1) }},
+		{title: "Extend Down", section: secHistory, pane: paneList, mods: ui.Shift, key: ui.KeyDown, keyName: "⇧↓", enabled: commit != nil,
+			run: func() { a.extendCommits(1) }},
+		{title: "Extend Up", section: secHistory, pane: paneList, mods: ui.Shift, key: ui.KeyUp, keyName: "⇧↑", enabled: commit != nil,
+			run: func() { a.extendCommits(-1) }},
 
 		// Branches
 		{title: "Copy Commit (Cherry-Pick)", section: secBranches, pane: paneFiles, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true,
@@ -139,6 +147,10 @@ func (a *App) goTo(s section) {
 func (a *App) step(d int) {
 	sel, n, st := a.current()
 	if sel == nil || n == 0 {
+		return
+	}
+	if sel == &a.commitSel {
+		a.stepCommits(d)
 		return
 	}
 	*sel = max(0, min(*sel+d, n-1))

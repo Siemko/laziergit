@@ -50,12 +50,20 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 	a.commitsList.Label = func(i int) string { return commits[i].Name }
 	hot := a.hot(c, paneList)
 	var list ui.Element
+	shiftClicked := -1
 	listIn(c, hot, func() {
 		list = ui.List(c.Key("commits"), &a.commitsList, n, func(i int) {
-			a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, i == a.commitSel, hot, a.listW).
+			chosen := i == a.commitSel || a.commitsChosen.Has(commits[i].Hash())
+			row := a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, chosen, hot, a.listW).
 				ContextMenu(func(m *ui.Menu) { a.commitMenu(m, i) })
+			if row.Clicked() && row.ClickModifiers()&ui.Shift != 0 {
+				shiftClicked = i
+			}
 		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneList).FocusRing(false)
 	})
+	if a.followCommitSel(shiftClicked) {
+		c.Invalidate() // the rows built show the range as it was
+	}
 	if list.Submitted() {
 		a.pane = paneFiles
 	}
@@ -136,31 +144,41 @@ func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []co
 	})
 }
 
+// commitMenu is the menu of commit i, which acts on the range it is in, as
+// a right-click on a commit out of it chooses it alone.
 func (a *App) commitMenu(m *ui.Menu, i int) {
-	a.commitSel = i
 	commits := a.snap.Commits
-	if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
-		a.toggleCopy("HEAD", commits, i)
+	if !a.commitsChosen.Has(commits[i].Hash()) {
+		a.chooseCommits(i, i)
+	}
+	a.commitSel, a.commitSelSeen = i, i
+	n := len(a.chosenCommits())
+	copyItem, dropItem := copyLabel(a.isCopied(commits[i])), "Drop Commit…"
+	if n > 1 {
+		copyItem, dropItem = fmt.Sprintf("Copy %d Commits (Cherry-Pick)", n), fmt.Sprintf("Drop %d Commits…", n)
+	}
+	if m.Item(copyItem).Shortcut(ui.Shift, ui.KeyC).Chosen() {
+		a.copyCommits()
 	}
 	if len(a.copied) > 0 && m.Item("Paste Copied Commits…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
 		a.pasteCopied()
 	}
 	m.Separator()
-	if m.Item("Reword…").Shortcut(0, ui.KeyR).Chosen() {
+	if n == 1 && m.Item("Reword…").Shortcut(0, ui.KeyR).Chosen() {
 		a.reword(i)
 	}
-	if m.Item("Fixup into Commit Below").Shortcut(0, ui.KeyF).Chosen() {
-		a.fixup(i)
+	if a.canFixupChosen() && m.Item("Fixup into Commit Below").Shortcut(0, ui.KeyF).Chosen() {
+		a.fixupChosen()
 	}
 	if m.Item("Move Up").Shortcut(ui.Ctrl, ui.KeyK).Chosen() {
-		a.moveCommit(i, -1)
+		a.moveChosen(-1)
 	}
 	if m.Item("Move Down").Shortcut(ui.Ctrl, ui.KeyJ).Chosen() {
-		a.moveCommit(i, 1)
+		a.moveChosen(1)
 	}
 	m.Separator()
-	if m.Item("Drop Commit…").Shortcut(0, ui.KeyD).Chosen() {
-		a.drop(i)
+	if m.Item(dropItem).Shortcut(0, ui.KeyD).Chosen() {
+		a.dropChosen()
 	}
 }
 
@@ -443,22 +461,6 @@ func (a *App) drop(i int) {
 	a.confirm("Drop “"+commits[i].Name+"”?", "The commit is removed from the branch's history by an interactive rebase.", "Drop", func() {
 		a.run("Dropping…", func(r *core.Repo) error { return r.DropCommit(commits, i) })
 	})
-}
-
-func (a *App) fixup(i int) {
-	commits := a.snap.Commits
-	if i < 0 || i >= len(commits) {
-		return
-	}
-	a.run("Fixing up…", func(r *core.Repo) error { return r.FixupCommit(commits, i) })
-}
-
-func (a *App) moveCommit(i, delta int) {
-	commits := a.snap.Commits
-	if j := i + delta; j < 0 || j >= len(commits) {
-		return
-	}
-	a.run("Moving…", func(r *core.Repo) error { return r.MoveCommit(commits, i, delta) }, func() { a.commitSel = i + delta })
 }
 
 func (a *App) reword(i int) {

@@ -54,7 +54,7 @@ window, then quit.
 |---|---|
 | Changes | file list with status, stage/unstage a file or everything, discard, commit (summary and description), amend |
 | Staging | lazygit's line staging: the file's diff line by line, syntax highlighted; choose lines (click, ⇧-click, `j`/`k`, `J`/`K`, `v` range, `a` hunk) and stage, unstage or discard them (`space`, `d`), or a whole hunk from its header; `tab` switches between the staged and unstaged sides |
-| History | the latest 300 commits, with lazygit's graph drawn as curves, branch and tag chips, pushed/unpushed state; commit files and per-file diff; **reword, fixup, move up/down, drop** (interactive rebase); continue/abort banner |
+| History | the latest 300 commits, with lazygit's graph drawn as curves, branch and tag chips, pushed/unpushed state; commit files and per-file diff; **reword, fixup, move up/down, drop** (interactive rebase); a range of commits (⇧-click, `J`/`K`, ⇧↑/⇧↓, `v` range) to fix up, move, drop or copy at once; continue/abort banner |
 | Conflicts | each conflict as a card of its current, base (diff3) and incoming sides, highlighted, the lines between folded; keep a side, both, or every conflict's one side (`space`, `b`, `j`/`k`, `←`/`→`), undo (`z`); the file is staged once resolved, and the app offers to continue; Abort / Skip / Continue for merges, rebases, cherry-picks and reverts, started in the app or not |
 | Branches | checkout, new, merge, rebase onto, delete; upstream ahead/behind; each branch's commits, with their graph |
 | Cherry-pick | copy commits from any branch's log or the history (`C`), paste them onto the current branch (`V`), conflicts resolved as a merge's |

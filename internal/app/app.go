@@ -89,6 +89,14 @@ type App struct {
 	// Lists and what they chose.
 	filesList, commitsList, branchesList, stashList, detailFilesList ui.ListState
 	fileSel, commitSel, branchSel, stashSel, detailFileSel           int
+	// commitsChosen is History's range, by hash, beside the commit the
+	// keys are on (commitSel); commitSticky is v, which makes j and k
+	// extend it; commitsMoved is the rows a range moved to, chosen again
+	// once the log is loaded, its hashes new.
+	commitsChosen ui.Selection[string]
+	commitSticky  bool
+	commitsMoved  [2]int
+	commitSelSeen int // commitSel as the app last set it, to see the list's own moves
 
 	// The detail of the row chosen.
 	detailKey   string
@@ -170,6 +178,8 @@ func New(host Host, opts core.Options) *App {
 		listW:    380,
 		filesW:   240,
 		filesH:   150,
+
+		commitsMoved: [2]int{-1, -1},
 	}
 	opts.OnCommand = func(cmd string, commandLine bool) {
 		a.host.Post(func() { a.addLog(cmd, commandLine) })
@@ -218,6 +228,9 @@ func (a *App) attach(r *core.Repo) {
 	a.repo, a.snap, a.openErr, a.loadErr = r, nil, "", ""
 	a.jobs = nil
 	a.fileSel, a.commitSel, a.branchSel, a.stashSel = 0, 0, 0, 0
+	a.commitSelSeen = 0
+	a.commitsChosen.Clear()
+	a.commitSticky, a.commitsMoved = false, [2]int{-1, -1}
 	a.detailKey, a.diffKey = "", ""
 	a.refresh(false)
 	if a.host.Watch != nil {
@@ -346,6 +359,7 @@ func (a *App) clampSelections() {
 	clamp(&a.commitSel, len(a.snap.Commits))
 	clamp(&a.branchSel, len(a.snap.Branches))
 	clamp(&a.stashSel, len(a.snap.Stash))
+	a.loadCommitRange()
 }
 
 // job is an action of the window on its repository.

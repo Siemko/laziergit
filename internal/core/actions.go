@@ -469,35 +469,87 @@ func (r *Repo) Commit(summary, description string, amend bool) error {
 // whose todo list lazygit's daemon (see HandleDaemon) edits.
 
 func (r *Repo) DropCommit(commits []*models.Commit, i int) error {
+	return r.DropCommits(commits, i, i)
+}
+
+// DropCommits drops commits lo to hi of a log, newest first, in one
+// interactive rebase. A merge is dropped only by itself: its todo is a
+// merge line, not a pick to drop.
+func (r *Repo) DropCommits(commits []*models.Commit, lo, hi int) error {
+	if err := checkRange(commits, lo, hi); err != nil {
+		return err
+	}
+	if lo == hi && commits[lo].IsMerge() {
+		return r.doMayConflict(func(g *commands.GitCommand) error { return g.Rebase.DropMergeCommit(commits, lo) })
+	}
+	if err := noMerges(commits, lo, hi, "dropped"); err != nil {
+		return err
+	}
 	return r.doMayConflict(func(g *commands.GitCommand) error {
-		if commits[i].IsMerge() {
-			// A merge's todo is a merge line, not a pick to drop.
-			return g.Rebase.DropMergeCommit(commits, i)
-		}
-		return g.Rebase.InteractiveRebase(commits, i, i, todo.Drop, "")
+		return g.Rebase.InteractiveRebase(commits, lo, hi, todo.Drop, "")
 	})
+}
+
+// checkRange fails for a range lo to hi that isn't one of commits.
+func checkRange(commits []*models.Commit, lo, hi int) error {
+	if lo < 0 || hi < lo || hi >= len(commits) {
+		return fmt.Errorf("no commits %d to %d of %d", lo, hi, len(commits))
+	}
+	return nil
+}
+
+// noMerges fails for a range with a merge in it, which a rebase of more
+// than one commit can't take.
+func noMerges(commits []*models.Commit, lo, hi int, verb string) error {
+	for _, c := range commits[lo : hi+1] {
+		if c.IsMerge() {
+			return fmt.Errorf("a merge commit can't be %s with others: choose it alone", verb)
+		}
+	}
+	return nil
 }
 
 // FixupCommit squashes a commit into the one below it, keeping that one's
 // message.
 func (r *Repo) FixupCommit(commits []*models.Commit, i int) error {
-	if i+1 >= len(commits) {
+	return r.FixupCommits(commits, i, i)
+}
+
+// FixupCommits squashes commits lo to hi of a log, newest first, into the
+// one below them, keeping that one's message, in one interactive rebase.
+func (r *Repo) FixupCommits(commits []*models.Commit, lo, hi int) error {
+	if err := checkRange(commits, lo, hi); err != nil {
+		return err
+	}
+	if hi+1 >= len(commits) {
 		return errors.New("there is no commit below to fix up into")
 	}
-	if commits[i].IsMerge() {
-		return errors.New("a merge commit can't be fixed up into another")
+	if err := noMerges(commits, lo, hi, "fixed up into another"); err != nil {
+		return err
 	}
 	return r.doMayConflict(func(g *commands.GitCommand) error {
-		return g.Rebase.InteractiveRebase(commits, i, i, todo.Fixup, "")
+		return g.Rebase.InteractiveRebase(commits, lo, hi, todo.Fixup, "")
 	})
 }
 
 func (r *Repo) MoveCommit(commits []*models.Commit, i, delta int) error {
+	return r.MoveCommits(commits, i, i, delta)
+}
+
+// MoveCommits moves commits lo to hi of a log, newest first, one place up
+// (delta -1, newer) or down (delta 1), in one interactive rebase.
+func (r *Repo) MoveCommits(commits []*models.Commit, lo, hi, delta int) error {
+	if err := checkRange(commits, lo, hi); err != nil {
+		return err
+	}
+	if lo+delta < 0 || hi+delta >= len(commits) {
+		return errors.New("there is no commit to move past")
+	}
 	return r.doMayConflict(func(g *commands.GitCommand) error {
 		if delta < 0 {
-			return g.Rebase.MoveCommitsUp(commits, i, i)
+			return g.Rebase.MoveCommitsUp(commits, lo, hi)
 		}
-		return g.Rebase.MoveCommitsDown(commits, i, i)
+		return g.Rebase.MoveCommitsDown(commits, lo, hi)
 	})
 }
 
