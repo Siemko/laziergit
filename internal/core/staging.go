@@ -70,22 +70,22 @@ func (r *Repo) ApplyLines(f *models.File, diff string, indices []int, action Lin
 		FileNameOverride:    f.Path,
 	}).FormatPlain()
 
-	return r.doPaths(func(g *commands.GitCommand) error {
-		if live := g.WorkingTree.WorktreeFileDiff(f, git_commands.DiffModePlain, action == UnstageLines); live != diff {
+	return r.do(func(g *commands.GitCommand) error {
+		if live := r.fileDiff(f, action == UnstageLines); live != diff {
 			return ErrStale
 		}
 		switch {
 		case whole && action == StageLines:
-			return g.WorkingTree.StageFile(f.Path)
+			return g.WorkingTree.StageFile(literal(f.Path))
 		case whole && action == UnstageLines:
-			return g.WorkingTree.UnStageFile(f.Names(), f.Tracked)
+			return g.WorkingTree.UnStageFile(literals(f.Names()), f.Tracked)
 		case whole && action == DiscardLines && f.ShortStatus == "??":
 			// Untracked: discarding all of it is removing it.
-			return g.WorkingTree.DiscardAllFileChanges(f)
+			return r.discardFile(g, f)
 		case whole && action == DiscardLines:
 			// The work tree's changes go, back to the index: a file added
 			// and changed since ("AM") keeps what is staged.
-			return g.WorkingTree.DiscardUnstagedFileChanges(f)
+			return r.gitRun("checkout", "--", literal(f.Path))
 		case whole:
 			return errors.New("unexpected whole-file action")
 		}

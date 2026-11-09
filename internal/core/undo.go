@@ -253,10 +253,29 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 	if err != nil {
 		return err
 	}
+	index, err := r.git_("ls-files", "-z")
+	if err != nil {
+		return err
+	}
+	inIndex := map[string]bool{}
+	for _, p := range strings.Split(index, "\x00") {
+		inIndex[p] = true
+	}
 	var hit []string
 	for _, p := range strings.Split(tree, "\x00") {
 		if p == "" {
 			continue
+		}
+		// A path the reset creates that the file system has already, by
+		// another name it takes for the same, as "docs/a.md" for
+		// "Docs/A.md" on a disk that ignores case.
+		if !inIndex[p] {
+			if st, err := os.Lstat(filepath.Join(r.Path, p)); err == nil && !st.IsDir() && !isFile[p] && !isDir[p] {
+				if !r.trackedAs(p, inIndex) {
+					hit = append(hit, p)
+					continue
+				}
+			}
 		}
 		for dir := p; dir != "." && dir != "/"; dir = filepath.Dir(dir) {
 			if isFile[dir] {
@@ -283,6 +302,34 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		return fmt.Errorf("files git doesn't track would be overwritten: %s; move them away first", strings.Join(hit[:min(len(hit), 5)], ", "))
 	}
 	return nil
+}
+
+// trackedAs reports whether the file at p on disk is a tracked file under
+// another spelling of its name, as on a disk that ignores case, which the
+// reset rewrites rather than loses: the same file as one the index has.
+func (r *Repo) trackedAs(p string, inIndex map[string]bool) bool {
+	st, err := os.Stat(filepath.Join(r.Path, p))
+	if err != nil {
+		return false
+	}
+	dir := filepath.Dir(p)
+	entries, err := os.ReadDir(filepath.Join(r.Path, dir))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		q := filepath.Join(dir, e.Name())
+		if dir == "." {
+			q = e.Name()
+		}
+		if !inIndex[q] {
+			continue
+		}
+		if other, err := os.Stat(filepath.Join(r.Path, q)); err == nil && os.SameFile(st, other) {
+			return true
+		}
+	}
+	return false
 }
 
 // inTheWay reports whether writing the file p, under the local directory

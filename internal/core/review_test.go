@@ -536,3 +536,123 @@ func TestDeleteBranchMergedToHeadNotUpstream(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 }
+
+// Round 4 of the review.
+
+func TestPathCommandHooksKeepTheirPatterns(t *testing.T) {
+	r, dir := newRepo(t)
+	out := filepath.Join(t.TempDir(), "seen")
+	for _, hook := range []string{"post-checkout", "post-index-change"} {
+		os.WriteFile(filepath.Join(dir, ".git", "hooks", hook), []byte("#!/bin/sh\necho \"${GIT_LITERAL_PATHSPECS:-unset} $(git ls-files -- '*.txt' | tr '\\n' ' ')\" >> "+out+"\n"), 0o755)
+	}
+	write(t, dir, "one.txt", "edited\n")
+	if err := r.ToggleStaged(fileNamed(t, load(t, r), "one.txt")); err != nil { // post-index-change
+		t.Fatal(err)
+	}
+	if err := r.Discard(fileNamed(t, load(t, r), "one.txt")); err != nil { // post-checkout
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(out)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		t.Fatal("no hook ran")
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "unset ") || !strings.Contains(l, "one.txt") {
+			t.Fatalf("a hook saw %q", l)
+		}
+	}
+}
+
+func TestMarkResolvedRefusesFileTooLargeToCheck(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "checkout", "-q", "-b", "side", "HEAD~1")
+	write(t, dir, "two.txt", "side\n")
+	git(t, dir, "commit", "-q", "-am", "side")
+	git(t, dir, "checkout", "-q", "main")
+	write(t, dir, "two.txt", "main\n")
+	git(t, dir, "commit", "-q", "-am", "main")
+	if err := r.Merge("side"); !IsConflict(err) {
+		t.Fatalf("merge: %v", err)
+	}
+	f := fileNamed(t, load(t, r), "two.txt")
+	big, _ := os.OpenFile(filepath.Join(dir, "two.txt"), os.O_APPEND|os.O_WRONLY, 0)
+	big.Truncate(maxConflictedSize + 1)
+	big.Close()
+	if err := r.MarkResolved(f); err == nil {
+		t.Fatal("staged a conflicted file too large to check")
+	}
+	if u := git(t, dir, "ls-files", "-u", "--", "two.txt"); u == "" {
+		t.Fatal("no longer unmerged")
+	}
+}
+
+func TestContinueStoppingAgainIsAConflict(t *testing.T) {
+	r, dir := newRepo(t)
+	// Two commits of a branch, each conflicting with main.
+	git(t, dir, "checkout", "-q", "-b", "side", "HEAD~2")
+	write(t, dir, "two.txt", "side two\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "side two")
+	write(t, dir, "three.txt", "side three\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "side three")
+	if err := r.RebaseOnto("main"); !IsConflict(err) {
+		t.Fatalf("rebase: %v", err)
+	}
+	f := fileNamed(t, load(t, r), "two.txt")
+	content, _ := r.ReadConflicted(f.Path)
+	if _, err := r.ResolveConflict(f, content, ParseConflicts(content, 0).Resolve(0, PickTheirs)); err != nil {
+		t.Fatal(err)
+	}
+	// The continue applies the first and stops on the second: a conflict,
+	// though the state is rebasing before and after, in any language.
+	t.Setenv("LC_ALL", "pl_PL.UTF-8")
+	t.Setenv("LANG", "pl_PL.UTF-8")
+	err := r.ContinueOperation(load(t, r).State)
+	var ce conflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("continue: %v", err)
+	}
+	// A pull refused during the rebase is an error, not a conflict.
+	if err := r.Pull(); errors.As(err, &ce) {
+		t.Fatalf("pull during a rebase taken for a conflict: %v", err)
+	}
+}
+
+func TestDeleteBranchOtherRefusalIsGitsError(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "branch", "elsewhere")
+	git(t, dir, "worktree", "add", "-q", filepath.Join(t.TempDir(), "wt"), "elsewhere")
+	err := r.DeleteBranch("elsewhere", false)
+	if err == nil || errors.Is(err, ErrNotMerged) {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestUndoRefusesFileByAnotherCase(t *testing.T) {
+	r, dir := newRepo(t)
+	probe := filepath.Join(dir, "PROBE")
+	os.WriteFile(probe, nil, 0o644)
+	_, err := os.Stat(filepath.Join(dir, "probe"))
+	os.Remove(probe)
+	if err != nil {
+		t.Skip("the disk tells case apart")
+	}
+	os.MkdirAll(filepath.Join(dir, "Docs"), 0o755)
+	write(t, dir, "Docs/A.md", "a\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "docs")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	write(t, dir, "docs/a.md", "mine\n")
+	s, _ := r.FindUndo(false)
+	if err := r.ApplyUndo(s, false); err == nil {
+		t.Fatal("overwrote a file named by another case")
+	}
+	if got := readFile(t, dir, "docs/a.md"); got != "mine\n" {
+		t.Fatalf("lost %q", got)
+	}
+}

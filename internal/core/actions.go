@@ -3,6 +3,8 @@ package core
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jesseduffield/lazygit/pkg/commands"
@@ -18,11 +20,11 @@ func (r *Repo) ToggleStaged(f *models.File) error {
 	if f.HasUnstagedChanges && f.HasInlineMergeConflicts {
 		return errConflicted(f.Path)
 	}
-	return r.doPaths(func(g *commands.GitCommand) error {
+	return r.do(func(g *commands.GitCommand) error {
 		if f.HasUnstagedChanges {
-			return g.WorkingTree.StageFile(f.Path)
+			return g.WorkingTree.StageFile(literal(f.Path))
 		}
-		return g.WorkingTree.UnStageFile(f.Names(), f.Tracked)
+		return g.WorkingTree.UnStageFile(literals(f.Names()), f.Tracked)
 	})
 }
 
@@ -58,7 +60,49 @@ func (r *Repo) Discard(f *models.File) error {
 	if f.IsNestedRepository() {
 		return ErrNestedRepository
 	}
-	return r.doPaths(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
+	return r.do(func(g *commands.GitCommand) error { return r.discardFile(g, f) })
+}
+
+// discardFile throws a file's changes away, from the index and the work
+// tree, as lazygit's DiscardAllFileChanges does, with its paths literal
+// pathspecs for git and checked paths for the file system.
+func (r *Repo) discardFile(g *commands.GitCommand, f *models.File) error {
+	if f.IsRename() {
+		before, after, err := g.WorkingTree.BeforeAndAfterFileForRename(f)
+		if err != nil {
+			return err
+		}
+		if err := r.discardFile(g, before); err != nil {
+			return err
+		}
+		return r.discardFile(g, after)
+	}
+	path := literal(f.Path)
+	switch f.ShortStatus {
+	case "AA":
+		if err := r.gitRun("checkout", "--ours", "--", path); err != nil {
+			return err
+		}
+		return r.gitRun("add", "--", path)
+	case "DU":
+		return r.gitRun("rm", "--", path)
+	}
+	if f.HasStagedChanges || f.HasMergeConflicts {
+		if err := r.gitRun("reset", "--", path); err != nil {
+			return err
+		}
+	}
+	if f.ShortStatus == "DD" || f.ShortStatus == "AU" {
+		return nil
+	}
+	if f.Added {
+		// Not in HEAD: discarding it is removing it.
+		if !filepath.IsLocal(f.Path) {
+			return fmt.Errorf("%s isn't a path in the work tree", f.Path)
+		}
+		return os.RemoveAll(filepath.Join(r.Path, f.Path))
+	}
+	return r.gitRun("checkout", "--", path)
 }
 
 // DeleteNestedRepository deletes a repository inside the work tree that
@@ -67,7 +111,7 @@ func (r *Repo) DeleteNestedRepository(f *models.File) error {
 	if !f.IsNestedRepository() {
 		return errors.New(f.Path + " is not a repository")
 	}
-	return r.doPaths(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
+	return r.do(func(g *commands.GitCommand) error { return r.discardFile(g, f) })
 }
 
 // conflictError is a command stopping with an operation in progress, as
@@ -78,12 +122,34 @@ type conflictError struct{ err error }
 func (e conflictError) Error() string { return e.err.Error() }
 func (e conflictError) Unwrap() error { return e.err }
 
+// stopPoint is where a repository stands, to tell whether a command
+// stopped it: the operation in progress, HEAD, and whether files conflict.
+type stopPoint struct {
+	state    models.WorkingTreeState
+	head     string
+	unmerged bool
+}
+
+func (r *Repo) stopPoint(g *commands.GitCommand) stopPoint {
+	head, _ := r.git_("rev-parse", "-q", "--verify", "HEAD")
+	unmerged, _ := r.git_("ls-files", "-u", "-z")
+	return stopPoint{state: g.Status.WorkingTreeState(), head: strings.TrimSpace(head), unmerged: unmerged != ""}
+}
+
 // doMayConflict is do for commands that stop on conflicts.
 func (r *Repo) doMayConflict(fn func(g *commands.GitCommand) error) error {
 	return r.do(func(g *commands.GitCommand) error {
-		before := g.Status.WorkingTreeState()
+		before := r.stopPoint(g)
 		err := fn(g)
-		if err != nil && g.Status.WorkingTreeState().Any() && before != g.Status.WorkingTreeState() {
+		if err == nil {
+			return nil
+		}
+		// Stopped by this command, rather than refused while an operation
+		// was in progress already: the operation started or moved on (a
+		// continue applying commits before the next conflict), or files
+		// came to conflict.
+		after := r.stopPoint(g)
+		if after.state.Any() && (after.state != before.state || after.head != before.head || after.unmerged && !before.unmerged) {
 			return conflictError{err}
 		}
 		return err
@@ -196,6 +262,18 @@ func (r *Repo) branchExists(name string) bool {
 	return err == nil
 }
 
+// branchMerged reports whether a branch is merged into HEAD and, when it
+// has an upstream, into that, as git branch -d asks.
+func (r *Repo) branchMerged(g *commands.GitCommand, name string) bool {
+	if !g.Branch.IsAncestor(name, "HEAD") {
+		return false
+	}
+	if _, err := r.git_("rev-parse", "-q", "--verify", name+"@{upstream}"); err != nil {
+		return true // no upstream
+	}
+	return g.Branch.IsAncestor(name, name+"@{upstream}")
+}
+
 // DeleteBranch deletes a branch: unless force, only one merged, failing
 // with ErrNotMerged otherwise.
 func (r *Repo) DeleteBranch(name string, force bool) error {
@@ -206,9 +284,10 @@ func (r *Repo) DeleteBranch(name string, force bool) error {
 		err := g.Branch.LocalDelete([]string{name}, force)
 		// Whether it was refused for not being merged is known from the
 		// branch, not git's words, which follow the user's language.
-		// git refuses a branch not merged into HEAD or into its upstream:
-		// still there after a failed delete, it is one of those.
-		if err != nil && !force && r.branchExists(name) {
+		// git refuses a branch not merged into HEAD, or into its upstream
+		// when it has one; another refusal, as of a branch checked out in
+		// another worktree, is git's own error.
+		if err != nil && !force && r.branchExists(name) && !r.branchMerged(g, name) {
 			return fmt.Errorf("%w: %w", ErrNotMerged, err)
 		}
 		return err

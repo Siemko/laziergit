@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,7 +207,7 @@ func (r *Repo) ReadConflicted(path string) (string, error) {
 // another app since, rather than overwrite that. With no conflict left in
 // content, the file is staged, as resolved; staged reports it.
 func (r *Repo) ResolveConflict(f *models.File, expected, content string) (staged bool, err error) {
-	err = r.doPaths(func(g *commands.GitCommand) error {
+	err = r.do(func(g *commands.GitCommand) error {
 		full, st, err := r.workTreeFile(f.Path)
 		if err != nil {
 			return err
@@ -228,7 +229,7 @@ func (r *Repo) ResolveConflict(f *models.File, expected, content string) (staged
 			return nil
 		}
 		staged = true
-		return g.WorkingTree.StageFile(f.Path)
+		return g.WorkingTree.StageFile(literal(f.Path))
 	})
 	return staged, err
 }
@@ -258,17 +259,32 @@ func writeAtomically(path, content string, perm os.FileMode) error {
 // MarkResolved stages a file whose conflicts are resolved: one without
 // conflict markers, or a conflict git wrote no markers for.
 func (r *Repo) MarkResolved(f *models.File) error {
-	return r.doPaths(func(g *commands.GitCommand) error {
+	return r.do(func(g *commands.GitCommand) error {
 		// Checked as it stages, under the lock: a file edited since can't
-		// be staged with markers.
+		// be staged with markers. A regular file too large to check isn't
+		// staged; a conflict that isn't a regular file, as a symlink, has
+		// no markers to check.
 		if f.HasInlineMergeConflicts {
-			if full, st, err := r.workTreeFile(f.Path); err == nil && st.Size() <= maxConflictedSize {
-				if b, err := os.ReadFile(full); err == nil && len(ParseConflicts(string(b), f.ConflictMarkerSize).Conflicts) > 0 {
+			full, st, err := r.workTreeFile(f.Path)
+			switch {
+			case errors.Is(err, ErrNotRegular), errors.Is(err, fs.ErrNotExist):
+				// No markers to check: a symlink, or a file deleted to
+				// resolve the conflict, whose deletion git add stages.
+			case err != nil:
+				return err
+			case st.Size() > maxConflictedSize:
+				return fmt.Errorf("%s is too large to check for conflict markers here", f.Path)
+			default:
+				b, err := os.ReadFile(full)
+				if err != nil {
+					return err
+				}
+				if len(ParseConflicts(string(b), f.ConflictMarkerSize).Conflicts) > 0 {
 					return errConflicted(f.Path)
 				}
 			}
 		}
-		return g.WorkingTree.StageFile(f.Path)
+		return g.WorkingTree.StageFile(literal(f.Path))
 	})
 }
 
