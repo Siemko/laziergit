@@ -22,9 +22,11 @@ func (a *App) selectedCommit() *models.Commit {
 	return a.snap.Commits[a.commitSel]
 }
 
-func (a *App) graphWidth() float32 {
+// graphWidth is the width of a graph's widest rows, up to graphMaxCol
+// columns.
+func graphWidth(graph [][]core.Pipe) float32 {
 	cols := int16(0)
-	for _, row := range a.snap.Graph {
+	for _, row := range graph {
 		for _, p := range row {
 			if p.Visible() {
 				cols = max(cols, p.From+1, p.To+1)
@@ -42,24 +44,25 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 		title = fmt.Sprintf("Latest %d commits", n)
 	}
 	paneHeader(c, pal, title, nil)
-	gw := a.graphWidth()
+	gw := graphWidth(a.snap.Graph)
 	a.commitsList.Selected = &a.commitSel
 	a.commitsList.Key = func(i int) any { return commits[i].Hash() }
 	a.commitsList.Label = func(i int) string { return commits[i].Name }
 	list := ui.List(c.Key("commits"), &a.commitsList, n, func(i int) {
-		a.commitRow(c, pal, i, gw)
+		a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, i == a.commitSel).
+			ContextMenu(func(m *ui.Menu) { a.commitMenu(m, i) })
 	}).Grow(1).FocusBind(&a.pane, paneList)
 	if list.Submitted() {
 		a.pane = paneFiles
 	}
 }
 
-func (a *App) commitRow(c *ui.Context, pal *palette, i int, gw float32) {
+// commitRow is a commit of a log: its graph, refs, subject, author, age
+// and hash, and whether it is copied to cherry-pick.
+func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []core.Pipe, gw float32, sel bool) ui.Element {
 	tt := c.Theme()
-	cm := a.snap.Commits[i]
-	row := a.snap.Graph[i]
-	sel := i == a.commitSel
-	ui.Row(c).Height(rowHeight).Padding(0, 10, 0, 4).Gap(6).AlignItems(ui.Center).Children(func() {
+	copied := a.isCopied(cm)
+	return ui.Row(c).Height(rowHeight).Padding(0, 10, 0, 4).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Width(gw).Height(rowHeight).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
 			drawGraphRow(p, r, row, cm, pal, tt, sel)
 		})
@@ -79,7 +82,7 @@ func (a *App) commitRow(c *ui.Context, pal *palette, i int, gw float32) {
 					color = pal.modified
 				}
 				chip := ui.Text(c, ref.label).FontSize(10).FontWeight(600).Padding(1, 6).Radius(4).
-					SingleLine().Shrink(1).MinWidth(48).MaxWidth(110).Tooltip(ref.full)
+					SingleLine().Shrink(1).MinWidth(min(48, float32(len(ref.label))*6+12)).MaxWidth(110).Tooltip(ref.full)
 				if sel {
 					chip.TextColor(tt.Accent).Background(tt.AccentText.Alpha(0.9))
 				} else {
@@ -92,6 +95,10 @@ func (a *App) commitRow(c *ui.Context, pal *palette, i int, gw float32) {
 			}
 			ui.Text(c, cm.Name).FontSize(13).SingleLine().Grow(1).Shrink(1).MinWidth(110)
 		})
+		if copied {
+			ui.Text(c, "copied").FontSize(10).FontWeight(700).Padding(1, 6).Radius(4).Shrink(0).
+				TextColor(tint(sel, tt, pal.conflict)).Background(pal.conflict.Alpha(0.14)).Tooltip("Copied to cherry-pick (V pastes)")
+		}
 		ui.Text(c, initials(cm.AuthorName)).FontSize(10).FontWeight(600).TextColor(tint(sel, tt, pal.muted)).Tooltip(cm.AuthorName).Shrink(0)
 		ui.Text(c, relTime(cm.UnixTimestamp)).FontSize(11).TextColor(tint(sel, tt, pal.muted)).Width(30).TextAlign(ui.End).Shrink(0)
 		hash := ui.Text(c, cm.ShortHash()).Font(codeFont).FontSize(11).Shrink(0)
@@ -103,11 +110,19 @@ func (a *App) commitRow(c *ui.Context, pal *palette, i int, gw float32) {
 		default:
 			hash.TextColor(tint(sel, tt, pal.hash))
 		}
-	}).ContextMenu(func(m *ui.Menu) { a.commitMenu(m, i) })
+	})
 }
 
 func (a *App) commitMenu(m *ui.Menu, i int) {
 	a.commitSel = i
+	commits := a.snap.Commits
+	if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
+		a.toggleCopy("HEAD", commits, i)
+	}
+	if len(a.copied) > 0 && m.Item("Paste Copied Commits…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
+		a.pasteCopied()
+	}
+	m.Separator()
 	if m.Item("Reword…").Shortcut(0, ui.KeyR).Chosen() {
 		a.reword(i)
 	}

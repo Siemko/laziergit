@@ -388,3 +388,71 @@ func readFile(t *testing.T, dir, name string) string {
 	}
 	return string(b)
 }
+
+func TestCherryPickAndUndo(t *testing.T) {
+	a, tt, dir := newTester(t)
+	git(t, dir, "stash", "-q", "-u") // a clean tree, as cherry-picks want
+	a.refresh(false)
+	tt.Key(0, ui.Key3)
+	tt.Frame()
+	for i, b := range a.snap.Branches {
+		if b.Name == "feature/graph" {
+			a.branchSel = i
+		}
+	}
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("Commits on feature/graph") || !tt.HasText("Draw pipes as curves") {
+		t.Fatalf("no branch commits in %q", tt.Texts())
+	}
+	// Enter goes into the branch's commits; C copies the newest two.
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	tt.Key(ui.Shift, ui.KeyC)
+	tt.Key(0, ui.KeyJ)
+	tt.Key(ui.Shift, ui.KeyC)
+	tt.Frame()
+	if len(a.copied) != 2 || !tt.HasText("2 commits copied from feature/graph") {
+		t.Fatalf("copied %d: %q", len(a.copied), tt.Texts())
+	}
+	snapshot(t, tt, "cherry-pick")
+
+	// Make main a branch that doesn't have them yet.
+	git(t, dir, "reset", "-q", "--hard", "HEAD~3")
+	a.refresh(false)
+	tt.Frame()
+	tt.Key(ui.Shift, ui.KeyV)
+	tt.Frame()
+	if err := tt.Click("Cherry-Pick"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	got := strings.Split(git(t, dir, "log", "-3", "--format=%s"), "\n")
+	if got[0] != "Draw pipes as curves" || got[1] != "Draw the commit graph" || len(a.copied) != 0 {
+		t.Fatalf("log after paste: %v, copied %d", got, len(a.copied))
+	}
+
+	// z undoes the last cherry-pick commit, asking first; Z redoes it.
+	tt.Key(0, ui.KeyZ)
+	tt.Frame()
+	if a.dialog == nil || !tt.HasText("Undo?") {
+		t.Fatalf("no undo prompt: %q", tt.Texts())
+	}
+	snapshot(t, tt, "undo")
+	if err := tt.Click("Undo"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if head := git(t, dir, "log", "-1", "--format=%s"); head != "Draw the commit graph" {
+		t.Fatalf("after undo HEAD is %q", head)
+	}
+	tt.Key(ui.Shift, ui.KeyZ)
+	tt.Frame()
+	if err := tt.Click("Redo"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if head := git(t, dir, "log", "-1", "--format=%s"); head != "Draw pipes as curves" {
+		t.Fatalf("after redo HEAD is %q", head)
+	}
+}

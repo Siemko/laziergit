@@ -120,6 +120,13 @@ func (a *App) toolbar(c *ui.Context, pal *palette) {
 			}
 		}
 		ui.Spacer(c)
+		if iconButton(c, iconUndo, "Undo (z)", false).Clicked() {
+			a.undo(false)
+		}
+		if iconButton(c, iconRedo, "Redo (Z)", false).Clicked() {
+			a.undo(true)
+		}
+		ui.Box(c).Width(1).Height(18).Background(pal.border).Margin(0, 4)
 		if toolButton(c, pal, iconFetch, "Fetch", "Fetch (f)").Clicked() {
 			a.fetch()
 		}
@@ -146,7 +153,7 @@ func (a *App) stateBanner(c *ui.Context, pal *palette) {
 	}
 	tt := c.Theme()
 	st := a.snap.State
-	ui.Row(c).Padding(8, 14).Gap(10).AlignItems(ui.Center).Shrink(0).Background(pal.modified.Alpha(0.14)).
+	ui.Row(c.Key("stateBanner")).Padding(8, 14).Gap(10).AlignItems(ui.Center).Shrink(0).Background(pal.modified.Alpha(0.14)).
 		BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
 		ui.Icon(c, iconWarning).FontSize(15).TextColor(pal.modified)
 		ui.Text(c, st.Title(a.repoTr())).FontWeight(600)

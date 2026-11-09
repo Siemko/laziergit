@@ -47,6 +47,11 @@ func (a *App) actions() []action {
 		{title: "Open Repository…", mods: ui.Cmd, key: ui.KeyO, keyName: "⌘O", enabled: true, run: a.openFolder},
 		{title: "Toggle Split / Unified Diff", mods: ui.Alt, key: ui.KeyS, keyName: "⌥S", enabled: true, run: func() { a.unified = 1 - a.unified }},
 
+		{title: "Undo", key: ui.KeyZ, keyName: "z", enabled: s != nil, run: func() { a.undo(false) }},
+		{title: "Redo", mods: ui.Shift, key: ui.KeyZ, keyName: "Z", enabled: s != nil, run: func() { a.undo(true) }},
+		{title: "Paste Copied Commits…", mods: ui.Shift, key: ui.KeyV, keyName: "V", enabled: len(a.copied) > 0, run: a.pasteCopied},
+		{title: "Clear Copied Commits", enabled: len(a.copied) > 0, run: func() { a.copied, a.copiedFrom = nil, "" }},
+
 		// Changes
 		{title: "Stage / Unstage File", section: secChanges, key: ui.KeySpace, keyName: "space", hint: true, enabled: file != nil,
 			run: func() { a.run("Staging…", func() error { return a.repo.ToggleStaged(file) }) }},
@@ -76,7 +81,18 @@ func (a *App) actions() []action {
 		{title: "Move Commit Up", section: secHistory, mods: ui.Ctrl, key: ui.KeyK, keyName: "⌃k", hint: true, enabled: commit != nil,
 			run: func() { a.moveCommit(a.commitSel, -1) }},
 
+		{title: "Copy Commit (Cherry-Pick)", section: secHistory, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true, enabled: commit != nil,
+			run: func() { a.toggleCopy("HEAD", s.Commits, a.commitSel) }},
+
 		// Branches
+		{title: "Copy Commit (Cherry-Pick)", section: secBranches, pane: paneFiles, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true,
+			enabled: a.branchCommitSel < len(a.branchCommits), run: func() {
+				if b := a.selectedBranch(); b != nil {
+					a.toggleCopy(b.Name, a.branchCommits, a.branchCommitSel)
+				}
+			}},
+		{title: "Back to Branches", section: secBranches, pane: paneFiles, key: ui.KeyEscape, keyName: "esc", hint: true, enabled: true,
+			run: func() { a.pane = paneList }},
 		{title: "Checkout Branch", section: secBranches, key: ui.KeySpace, keyName: "space", hint: true, enabled: branch != nil,
 			run: func() { a.checkout(branch) }},
 		{title: "New Branch…", section: secBranches, key: ui.KeyN, keyName: "n", hint: true, enabled: true, run: a.newBranch},
@@ -130,6 +146,9 @@ func (a *App) current() (*int, int, *ui.ListState) {
 	if a.snap == nil {
 		return nil, 0, nil
 	}
+	if a.pane == paneFiles && a.section == secBranches {
+		return &a.branchCommitSel, len(a.branchCommits), &a.branchCommitsList
+	}
 	if a.pane == paneFiles {
 		return &a.detailFileSel, len(a.detailFiles), &a.detailFilesList
 	}
@@ -148,9 +167,9 @@ func (a *App) current() (*int, int, *ui.ListState) {
 
 func (a *App) focusRight() {
 	switch {
-	case a.pane == paneList && (a.section == secHistory || a.section == secStash):
+	case a.pane == paneList && (a.section == secHistory || a.section == secStash || a.section == secBranches):
 		a.pane = paneFiles
-	case a.pane == paneList && a.section == secChanges, a.pane == paneFiles:
+	case a.pane == paneList && a.section == secChanges, a.pane == paneFiles && a.section != secBranches:
 		a.pane = paneDiff
 	}
 }
@@ -158,7 +177,7 @@ func (a *App) focusRight() {
 func (a *App) focusLeft() {
 	switch a.pane {
 	case paneDiff:
-		if a.section == secHistory || a.section == secStash {
+		if a.section == secHistory || a.section == secStash || a.section == secBranches {
 			a.pane = paneFiles
 		} else {
 			a.pane = paneList
@@ -257,8 +276,11 @@ func (a *App) hints() []hint {
 // paneForHints is the pane whose actions the status bar shows: the diff's
 // own while it has the keys, the list's otherwise.
 func paneForHints(a *App) pane {
-	if a.pane == paneDiff && a.section == secChanges {
+	switch {
+	case a.pane == paneDiff && a.section == secChanges:
 		return paneDiff
+	case a.pane == paneFiles && a.section == secBranches:
+		return paneFiles
 	}
 	return paneNone
 }

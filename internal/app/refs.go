@@ -28,7 +28,7 @@ func (a *App) branchList(c *ui.Context, pal *palette) {
 		a.branchRow(c, pal, branches[i], i == a.branchSel)
 	}).Grow(1).FocusBind(&a.pane, paneList)
 	if list.Submitted() {
-		a.checkout(branches[a.branchSel])
+		a.pane = paneFiles // into the branch's commits, as lazygit's Enter
 	}
 }
 
@@ -81,6 +81,9 @@ func (a *App) branchRow(c *ui.Context, pal *palette, b *models.Branch, sel bool)
 	})
 }
 
+// branchCommitLimit is how many of a branch's commits its detail shows.
+const branchCommitLimit = 200
+
 func (a *App) branchDetail(c *ui.Context, pal *palette) {
 	b := a.selectedBranch()
 	if b == nil {
@@ -88,48 +91,82 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 		return
 	}
 	tt := c.Theme()
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Padding(24, 28).Gap(14).MaxWidth(560).Children(func() {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, iconBranch).FontSize(22).TextColor(tt.Accent)
-				ui.Text(c, b.Name).FontSize(20).Bold().Selectable()
-				if b.Head {
-					ui.Text(c, "HEAD").FontSize(10).FontWeight(700).TextColor(tt.AccentText).Padding(2, 6).Radius(4).Background(tt.Accent)
+	key := fmt.Sprintf("%d:%s", a.gen, b.Name)
+	if key != a.branchKey {
+		if a.branchName != b.Name {
+			a.branchCommits, a.branchGraph, a.branchCommitSel = nil, nil, 0
+			a.branchCommitsList = ui.ListState{}
+		}
+		a.branchKey, a.branchName = key, b.Name
+		repo := a.repo
+		a.host.Go(func() {
+			commits, graph, err := repo.BranchCommits(b, branchCommitLimit)
+			a.host.Post(func() {
+				if a.branchKey != key {
+					return
 				}
-			})
-			card := func(label, value string) {
-				ui.Row(c).Gap(12).Children(func() {
-					ui.Text(c, label).FontSize(12).TextColor(pal.muted).Width(110)
-					ui.Text(c, value).FontSize(12).Selectable().Grow(1)
-				})
-			}
-			ui.Column(c).Gap(8).Padding(14).Radius(10).Background(pal.pane).Border(1, pal.border).Children(func() {
-				if b.IsTrackingRemote() {
-					card("Upstream", b.UpstreamRemote+"/"+b.UpstreamBranch)
-					card("Ahead / behind", fmt.Sprintf("%s / %s", orZero(b.AheadForPull), orZero(b.BehindForPull)))
-				} else {
-					card("Upstream", "none — Push publishes it")
+				if err != nil {
+					a.toastErr(err)
+					return
 				}
-				if r := recency(b); r != "" {
-					card("Last checked out", r+" ago")
-				}
-			})
-			ui.Row(c).Gap(8).Wrap().Children(func() {
-				if ui.PrimaryButton(c, "Checkout").Disabled(b.Head).Clicked() {
-					a.checkout(b)
-				}
-				if ui.Button(c, "Merge into current").Disabled(b.Head).Clicked() {
-					a.merge(b)
-				}
-				if ui.Button(c, "Rebase current onto").Disabled(b.Head).Clicked() {
-					a.rebaseOnto(b)
-				}
-				if ui.Button(c, "Delete…").Disabled(b.Head).Clicked() {
-					a.deleteBranch(b)
-				}
+				a.branchCommits, a.branchGraph = commits, graph
+				a.branchCommitSel = max(0, min(a.branchCommitSel, len(commits)-1))
 			})
 		})
+	}
+	ui.Column(c).Padding(16, 18, 14, 18).Gap(10).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, iconBranch).FontSize(18).TextColor(tt.Accent)
+			ui.Text(c, b.Name).FontSize(17).Bold().Selectable().SingleLine().Shrink(1)
+			if b.Head {
+				ui.Text(c, "HEAD").FontSize(10).FontWeight(700).TextColor(tt.AccentText).Padding(2, 6).Radius(4).Background(tt.Accent)
+			}
+			ui.Spacer(c)
+			info := "no upstream — Push publishes it"
+			if b.IsTrackingRemote() {
+				info = fmt.Sprintf("%s/%s · ↑%s ↓%s", b.UpstreamRemote, b.UpstreamBranch, orZero(b.AheadForPull), orZero(b.BehindForPull))
+			}
+			if r := recency(b); r != "" {
+				info += " · checked out " + r + " ago"
+			}
+			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1)
+		})
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.PrimaryButton(c, "Checkout").Disabled(b.Head).Clicked() {
+				a.checkout(b)
+			}
+			if ui.Button(c, "Merge into "+a.headName()).Disabled(b.Head).Clicked() {
+				a.merge(b)
+			}
+			if ui.Button(c, "Rebase "+a.headName()+" onto it").Disabled(b.Head).Clicked() {
+				a.rebaseOnto(b)
+			}
+			if ui.Button(c, "Delete…").Disabled(b.Head).Clicked() {
+				a.deleteBranch(b)
+			}
+		})
 	})
+	commits, graph := a.branchCommits, a.branchGraph
+	paneHeader(c, pal, "Commits on "+b.Name, func() {
+		if len(commits) > 0 {
+			ui.Text(c, "C copies to cherry-pick").FontSize(11).TextColor(pal.muted)
+		}
+	})
+	gw := graphWidth(graph)
+	a.branchCommitsList.Selected = &a.branchCommitSel
+	a.branchCommitsList.Key = func(i int) any { return commits[i].Hash() }
+	a.branchCommitsList.Label = func(i int) string { return commits[i].Name }
+	ui.List(c.Key("branchCommits"), &a.branchCommitsList, len(commits), func(i int) {
+		a.commitRow(c, pal, commits[i], graph[i], gw, i == a.branchCommitSel).ContextMenu(func(m *ui.Menu) {
+			a.branchCommitSel = i
+			if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
+				a.toggleCopy(b.Name, commits, i)
+			}
+			if len(a.copied) > 0 && m.Item("Paste Copied Commits onto "+a.headName()+"…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
+				a.pasteCopied()
+			}
+		})
+	}).Grow(1).FocusBind(&a.pane, paneFiles).Label("Branch commits")
 }
 
 // recency is how long ago a branch was checked out; lazygit's "*" for the

@@ -90,7 +90,19 @@ type App struct {
 	diffStaged  int // 0 unstaged, 1 staged, for a file with both
 	unified     int // 0 unified, 1 split
 	stage       stagingView
-	conflicts   conflictView
+
+	// The commits of the branch chosen in Branches.
+	branchKey, branchName string
+	branchCommits         []*models.Commit
+	branchGraph           [][]core.Pipe
+	branchCommitSel       int
+	branchCommitsList     ui.ListState
+
+	// Commits copied to cherry-pick, and the log they came from.
+	copied     []copiedCommit
+	copiedFrom string
+
+	conflicts conflictView
 	// offerContinue asks, once refreshed, to continue the operation
 	// whose last conflict was resolved; toConflicts shows the first
 	// conflicted file once a command stopped on conflicts.
@@ -302,6 +314,7 @@ func (a *App) View(c *ui.Context) {
 		ui.Column(c).Grow(1).MinWidth(0).Background(pal.pane).Children(func() {
 			a.toolbar(c, pal)
 			a.stateBanner(c, pal)
+			a.copiedBanner(c, pal)
 			if a.snap == nil {
 				ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).Label("Loading") })
 				return
@@ -324,7 +337,7 @@ func (a *App) View(c *ui.Context) {
 
 func (a *App) main(c *ui.Context, pal *palette) {
 	body := func() {
-		ui.Split(c, &a.listW, func() {
+		ui.Split(c.Key("body"), &a.listW, func() {
 			ui.Column(c).Fill().Children(func() { a.listPane(c, pal) })
 		}, func() {
 			ui.Column(c).Fill().Background(t(c).Background).Children(func() { a.detailPane(c, pal) })
@@ -334,7 +347,7 @@ func (a *App) main(c *ui.Context, pal *palette) {
 		body()
 		return
 	}
-	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+	ui.Column(c.Key("bodyAndLog")).Grow(1).MinHeight(0).Children(func() {
 		body()
 		ui.Box(c).Height(1).Background(pal.border)
 		a.logView(c, pal)

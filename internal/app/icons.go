@@ -20,5 +20,8 @@ var (
 	iconCheck    = icon(`<path d="M3 8.5l3 3 7-7"/>`)
 	iconFolder   = icon(`<path d="M1.5 4a1.5 1.5 0 0 1 1.5-1.5h3l1.5 2H13a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12z"/>`)
 	iconHead     = icon(`<circle cx="8" cy="8" r="3" fill="currentColor"/>`)
+	iconCopy     = icon(`<rect x="5.5" y="5.5" width="9" height="9" rx="2"/><path d="M10.5 5.5V3.5a2 2 0 0 0-2-2h-5a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h2"/>`)
+	iconUndo     = icon(`<path d="M5 3L2 6l3 3"/><path d="M2 6h7.5a4.5 4.5 0 0 1 0 9H6"/>`)
+	iconRedo     = icon(`<path d="M11 3l3 3-3 3"/><path d="M14 6H6.5a4.5 4.5 0 0 0 0 9H10"/>`)
 	iconWarning  = icon(`<path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.5v.01"/>`)
 )
