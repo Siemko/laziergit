@@ -60,17 +60,25 @@ func (a *App) askCredential(kind core.Credential, ch chan string) {
 	// sends it. Cancelling sends an empty line, which fails the command
 	// rather than leave it waiting with the repository taken.
 	answered := false
+	id := len(a.credentials)
 	answer := func(v string) {
 		if !answered {
 			answered = true
 			ch <- v + "\n"
+			delete(a.credentials, id)
 		}
 	}
 	if a.closed {
 		answer("")
 		return
 	}
-	a.credentials = append(a.credentials, answer)
+	if a.credentials == nil {
+		a.credentials = map[int]func(string){}
+	}
+	for a.credentials[id] != nil {
+		id++
+	}
+	a.credentials[id] = answer
 	a.dialog = &dialog{
 		kind: dialogCredential, title: titles[kind], message: "git is asking for your " + titles[kind] + ".",
 		button: "Continue", secret: kind != oscommands.Username, open: true,

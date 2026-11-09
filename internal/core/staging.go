@@ -39,6 +39,9 @@ func (r *Repo) ApplyLines(f *models.File, diff string, indices []int, action Lin
 	if f.HasInlineMergeConflicts {
 		return errConflicted(f.Path)
 	}
+	if err := checkPath(f.Path); err != nil {
+		return err
+	}
 	p := patch.Parse(diff)
 	lines := p.Lines()
 	var chosen []int
@@ -80,11 +83,17 @@ func (r *Repo) ApplyLines(f *models.File, diff string, indices []int, action Lin
 		case whole && action == UnstageLines:
 			return g.WorkingTree.UnStageFile(f.Names(), f.Tracked)
 		case whole && action == DiscardLines && f.ShortStatus == "??":
-			// Untracked: discarding all of it is removing it. A file
-			// added to the index and changed since ("AM") keeps what is
-			// staged, as the reverse patch below does.
+			// Untracked: discarding all of it is removing it.
 			return g.WorkingTree.DiscardAllFileChanges(f)
+		case whole && action == DiscardLines:
+			// The work tree's changes go, back to the index: a file added
+			// and changed since ("AM") keeps what is staged.
+			return g.WorkingTree.DiscardUnstagedFileChanges(f)
+		case whole:
+			return errors.New("unexpected whole-file action")
 		}
+		// Only partial choices go through a patch, whose header names the
+		// file raw (patchablePath above).
 		return g.Patch.ApplyPatch(text, opts)
 	})
 }

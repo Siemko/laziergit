@@ -123,6 +123,12 @@ func (a *App) toggleAll() {
 }
 
 func (a *App) confirmDiscard(f *models.File) {
+	if f.IsNestedRepository() {
+		a.confirm("Delete the repository "+f.Path+"?", "It is a repository of its own: it is deleted with all of its history, which can't be undone.", "Delete Repository", func() {
+			a.run("Deleting…", func(r *core.Repo) error { return r.DeleteNestedRepository(f) })
+		})
+		return
+	}
 	a.confirm("Discard changes to "+f.Path+"?", "Its changes are lost; this can't be undone.", "Discard", func() {
 		a.run("Discarding…", func(r *core.Repo) error { return r.Discard(f) })
 	})

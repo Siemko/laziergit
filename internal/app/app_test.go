@@ -534,20 +534,85 @@ func TestActionsRunInOrder(t *testing.T) {
 	}
 }
 
-func TestCloseWithWorkQueued(t *testing.T) {
-	a, h := newAsync(t, fixture(t))
+// manualHost holds what the app runs off the UI thread and posts to it,
+// for a test to run in the order it chooses.
+type manualHost struct{ gos, posts []func() }
+
+func (h *manualHost) host() Host {
+	return Host{
+		Post: func(fn func()) { h.posts = append(h.posts, fn) },
+		Go:   func(fn func()) { h.gos = append(h.gos, fn) },
+	}
+}
+
+// step runs what is held, work then posts, until nothing is.
+func (h *manualHost) step() {
+	for len(h.gos)+len(h.posts) > 0 {
+		h.runGos()
+		h.runPosts()
+	}
+}
+
+func (h *manualHost) runGos() {
+	for len(h.gos) > 0 {
+		fn := h.gos[0]
+		h.gos = h.gos[1:]
+		fn()
+	}
+}
+
+func (h *manualHost) runPosts() {
+	for len(h.posts) > 0 {
+		fn := h.posts[0]
+		h.posts = h.posts[1:]
+		fn()
+	}
+}
+
+func openManual(t *testing.T, dir string) (*App, *manualHost) {
+	h := &manualHost{}
+	cwd, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(cwd) })
+	a := New(h.host(), core.Options{ConfigDir: filepath.Join(t.TempDir(), "config")})
+	a.Open(dir, nil)
+	h.step()
+	if a.snap == nil {
+		t.Fatal("not loaded")
+	}
+	return a, h
+}
+
+func TestCloseDropsQueuedWork(t *testing.T) {
+	a, h := openManual(t, fixture(t))
 	dir := a.Repo().Path
 	files := a.snap.Files
 	a.run("Staging…", func(r *core.Repo) error { return r.ToggleAllStaged(files) })
 	a.run("Committing…", func(r *core.Repo) error { return r.Commit("never", "", false) })
-	a.Close() // must neither block nor panic
-	h.pump(t, func() bool { return a.busy == 0 })
+	// The first action finishes; the window closes before its end posts.
+	h.runGos()
+	a.Close()
+	h.step()
 	if got := git(t, dir, "log", "-1", "--format=%s"); got == "never" {
-		t.Fatal("committed after the window closed")
+		t.Fatal("the queued commit ran after the window closed")
+	}
+	if a.busy != 0 || len(a.jobs) != 0 {
+		t.Fatalf("busy %d, jobs %d", a.busy, len(a.jobs))
 	}
 	a.run("Fetching…", (*core.Repo).Fetch) // refused once closed
-	if a.busy != 0 {
+	if a.busy != 0 || len(h.gos) != 0 {
 		t.Fatal("ran work after closing")
+	}
+}
+
+func TestActionFromAfterStartsOnce(t *testing.T) {
+	a, h := openManual(t, fixture(t))
+	ran := 0
+	a.run("First…", func(*core.Repo) error { return nil }, func() {
+		a.run("Second…", func(*core.Repo) error { ran++; return nil })
+	})
+	h.step()
+	if ran != 1 || a.busy != 0 || a.running {
+		t.Fatalf("second ran %d times, busy %d, running %v", ran, a.busy, a.running)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jesseduffield/lazygit/pkg/app/daemon"
 	"github.com/jesseduffield/lazygit/pkg/commands"
@@ -72,6 +73,9 @@ type Repo struct {
 	hashPool     *utils.StringPool
 	tempDir      string
 	closed       bool // under gitMu
+	// closing is set as soon as the repository is to close: commands that
+	// haven't started yet fail, without waiting for the lock.
+	closing atomic.Bool
 
 	// Path is the work tree's root.
 	Path string
@@ -85,11 +89,16 @@ var (
 	current *Repo
 )
 
-func init() {
-	// Paths given to git are file names, never patterns: a file named
-	// ":(glob)*" stands for itself, not for every file. lazygit passes no
-	// pathspec magic of its own.
-	os.Setenv("GIT_LITERAL_PATHSPECS", "1")
+// checkPath refuses a file name git would read as a pattern of names
+// where it takes a path (a pathspec): a file named "*.go" or ":(glob)*"
+// would stand for others. The process doesn't set GIT_LITERAL_PATHSPECS
+// instead, as git hands it on to hooks, whose own patterns would stop
+// matching.
+func checkPath(path string) error {
+	if strings.ContainsAny(path, "*?[\\") || strings.HasPrefix(path, ":") {
+		return fmt.Errorf("laziergit can't act on %q: git would read its *, ?, [, \\ or leading : as a pattern of other files' names", path)
+	}
+	return nil
 }
 
 // ErrClosed is the error of a command of a repository closed.
@@ -101,8 +110,11 @@ var ErrClosed = errors.New("the repository is closed")
 // as when it was moved, it fails, leaving nothing current: a command must
 // never run in another repository's directory.
 func (r *Repo) enter() (leave func(), err error) {
+	if r.closing.Load() {
+		return nil, ErrClosed
+	}
 	gitMu.Lock()
-	if r.closed {
+	if r.closed || r.closing.Load() {
 		gitMu.Unlock()
 		return nil, ErrClosed
 	}
@@ -201,10 +213,15 @@ func Open(dir string, opts Options) (r *Repo, err error) {
 	return r, nil
 }
 
+// Closing marks the repository as about to close, at once: commands that
+// haven't started fail from then on. Close closes it.
+func (r *Repo) Closing() { r.closing.Store(true) }
+
 // Close closes the repository: its commands fail from then on, and its
 // temporary files are removed. It waits for a command running: call it off
 // the UI thread.
 func (r *Repo) Close() {
+	r.closing.Store(true)
 	gitMu.Lock()
 	r.closed = true
 	if current == r {
@@ -292,6 +309,9 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 // FileDiff is the diff of a file of the work tree: its staged changes, or
 // those not staged yet.
 func (r *Repo) FileDiff(f *models.File, staged bool) (string, error) {
+	if err := checkPath(f.Path); err != nil {
+		return "", err
+	}
 	return with(r, func() (string, error) {
 		return r.git.WorkingTree.WorktreeFileDiff(f, git_commands.DiffModePlain, staged), nil
 	})

@@ -391,7 +391,7 @@ func (a *App) undoConflict(f *models.File) {
 // rather than overwritten.
 func (a *App) writeConflicted(f *models.File, expected, content string, undoable bool) {
 	v := &a.conflicts
-	path := f.Path
+	path, markers := f.Path, f.ConflictMarkerSize
 	staged := false
 	stale := false
 	a.run("Resolving…", func(r *core.Repo) error {
@@ -403,6 +403,14 @@ func (a *App) writeConflicted(f *models.File, expected, content string, undoable
 		}
 		return err
 	}, func() {
+		if v.path != path {
+			// Another file shows now: it loads this one again when shown.
+			if staged {
+				a.toast("Resolved "+path, "")
+				a.offerContinue = true
+			}
+			return
+		}
 		if stale {
 			v.key = "" // load it again
 			a.toasts = append(a.toasts, toastReq{title: path + " changed on disk", desc: "It was loaded again: choose again.", kind: "warning"})
@@ -413,7 +421,7 @@ func (a *App) writeConflicted(f *models.File, expected, content string, undoable
 		} else if len(v.undo) > 0 {
 			v.undo = v.undo[:len(v.undo)-1]
 		}
-		v.set(path, content, v.markers, true)
+		v.set(path, content, markers, true)
 		if staged {
 			v.undo = nil
 			a.toast("Resolved "+path, "")

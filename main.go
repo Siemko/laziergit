@@ -65,7 +65,7 @@ func main() {
 			m.newWindow("")
 		}
 	})
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { m.quitting() })
+	mygo.App.OnBeforeQuit(m.beforeQuit)
 
 	mygo.App.WhenReady(func() {
 		mygo.App.SetMenu(m.menu())
@@ -78,10 +78,12 @@ func main() {
 				dirs = m.lastSession()
 			}
 		}
+		// Each repository opens in a window of its own, which keeps where
+		// it was; with none, the welcome window shows.
 		for _, d := range dirs {
 			m.open(d, nil)
 		}
-		if len(m.windows) == 0 {
+		if len(dirs) == 0 {
 			m.newWindow("")
 		}
 		if capture != "" {
@@ -133,8 +135,16 @@ func configDir() string {
 // loaded, then quits: for checking how the app looks from scripts.
 // LAZIERGIT_CAPTURE_SECTION shows a section first.
 func captureFirst(m *manager, path string) {
-	w := m.windows[0]
 	go func() {
+		var w *repoWindow
+		for w == nil {
+			time.Sleep(100 * time.Millisecond)
+			mygo.RunOnMain(func() {
+				if len(m.windows) > 0 {
+					w = m.windows[0]
+				}
+			})
+		}
 		if s := os.Getenv("LAZIERGIT_CAPTURE_SECTION"); s != "" {
 			time.Sleep(2 * time.Second)
 			w.win.Update(func() { w.app.ShowSection(s) })

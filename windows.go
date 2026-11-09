@@ -29,6 +29,8 @@ type manager struct {
 	closing bool
 	// recent is the repositories opened lately, newest first.
 	recent []string
+	// quitWhenIdle is set when a quit waits for the windows' actions.
+	quitWhenIdle bool
 }
 
 // repoWindow is a window and the app in it.
@@ -91,7 +93,6 @@ func (m *manager) openRoot(root string, from *repoWindow) {
 		if err != nil {
 			log.Printf("opening %s: %v", root, err)
 		}
-		w.win.Focus()
 	})
 }
 
@@ -121,6 +122,7 @@ func (m *manager) newWindow(path string) *repoWindow {
 			m.saveSession()
 		},
 		Recent:     func() []string { return m.recent },
+		Idle:       m.idle,
 		OpenRecent: func(path string) { m.open(path, w) },
 		Watch:      func(path string) { m.watch(w, path) },
 	}, core.Options{ConfigDir: m.configDir})
@@ -287,11 +289,37 @@ func (m *manager) saveSession() {
 	}
 }
 
-// quitting keeps the session as it is when the app quits, as its windows
-// close.
-func (m *manager) quitting() {
+// beforeQuit holds a quit while a window's actions run, as an undo
+// between its stash and its pop, and quits once they are done; then it
+// keeps the session as it is, as the windows close. It holds the first
+// quit alone: quitting again, as when the system logs out, goes through.
+func (m *manager) beforeQuit(e *mygo.QuitEvent) {
+	if !m.quitWhenIdle {
+		for _, w := range m.windows {
+			if w.app.Busy() {
+				e.PreventDefault()
+				m.quitWhenIdle = true
+				debugf("quit waits for window %d", w.win.ID())
+				return
+			}
+		}
+	}
+	m.quitWhenIdle = false
 	m.saveSession()
 	m.closing = true
+}
+
+// idle quits, when a quit waits, once no window has actions left.
+func (m *manager) idle() {
+	if !m.quitWhenIdle {
+		return
+	}
+	for _, w := range m.windows {
+		if w.app.Busy() {
+			return
+		}
+	}
+	mygo.App.Quit()
 }
 
 // writePrivate replaces a file the user alone reads, atomically.

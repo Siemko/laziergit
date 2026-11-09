@@ -50,6 +50,8 @@ type Host struct {
 	OpenRepository func()
 	// Opened is told of the repository the window opened.
 	Opened func(r *core.Repo)
+	// Idle, when set, is told when the window's actions are all done.
+	Idle func()
 	// Recent lists the repositories opened lately, newest first, and
 	// OpenRecent opens one, as OpenRepository does.
 	Recent     func() []string
@@ -111,10 +113,11 @@ type App struct {
 	copiedFrom string
 
 	conflicts conflictView
-	// jobs are the actions asked for, the first running.
-	jobs []job
+	// jobs are the actions asked for, the first running while running.
+	jobs    []job
+	running bool
 	// credentials answer the credential prompts git waits on.
-	credentials []func(string)
+	credentials map[int]func(string)
 	// closed is set once the window closed.
 	closed bool
 	// loadErr is why the first load failed; changedSince is set when the
@@ -219,11 +222,24 @@ func (a *App) Close() {
 		answer("")
 	}
 	a.credentials = nil
+	// Actions not started yet never start: only the one running, if any,
+	// finishes.
+	if a.running {
+		a.busy -= len(a.jobs) - 1
+		a.jobs = a.jobs[:1]
+	} else {
+		a.busy -= len(a.jobs)
+		a.jobs = nil
+	}
 	if r := a.repo; r != nil {
 		a.repo = nil
+		r.Closing() // a command not started yet fails, whoever runs first
 		a.host.Go(r.Close)
 	}
 }
+
+// Busy reports whether an action runs or waits to.
+func (a *App) Busy() bool { return a.busy > 0 }
 
 // ChangedOnDisk refreshes after the work tree or the repository changed
 // outside the app. It skips changes the app's own commands and refreshes
@@ -330,13 +346,14 @@ func (a *App) run(doing string, fn func(r *core.Repo) error, after ...func()) {
 	}
 	a.busy++
 	a.jobs = append(a.jobs, job{repo: a.repo, doing: doing, fn: fn, after: after})
-	if len(a.jobs) == 1 {
+	if !a.running {
 		a.startJob()
 	}
 }
 
 func (a *App) startJob() {
 	j := a.jobs[0]
+	a.running = true
 	a.doing = j.doing
 	a.host.Go(func() {
 		err := j.fn(j.repo)
@@ -346,6 +363,7 @@ func (a *App) startJob() {
 
 func (a *App) endJob(j job, err error) {
 	a.busy--
+	a.running = false
 	if len(a.jobs) > 0 {
 		a.jobs = a.jobs[1:]
 	}
@@ -362,12 +380,20 @@ func (a *App) endJob(j job, err error) {
 			f()
 		}
 	}
-	if len(a.jobs) > 0 {
+	switch {
+	case a.closed:
+		a.jobs, a.doing = nil, ""
+	case a.running:
+		// An after callback asked for an action, which started.
+	case len(a.jobs) > 0:
 		a.startJob()
-		return
+	default:
+		a.doing = ""
+		a.refresh(false)
 	}
-	a.doing = ""
-	a.refresh(false)
+	if a.busy == 0 && a.host.Idle != nil {
+		a.host.Idle()
+	}
 }
 
 type toastReq struct {

@@ -18,6 +18,9 @@ func (r *Repo) ToggleStaged(f *models.File) error {
 	if f.HasUnstagedChanges && f.HasInlineMergeConflicts {
 		return errConflicted(f.Path)
 	}
+	if err := checkPath(f.Path); err != nil {
+		return err
+	}
 	return r.do(func(g *commands.GitCommand) error {
 		if f.HasUnstagedChanges {
 			return g.WorkingTree.StageFile(f.Path)
@@ -50,8 +53,49 @@ func (r *Repo) ToggleAllStaged(files []*models.File) error {
 	})
 }
 
+// ErrNestedRepository is the error of discarding a repository inside the
+// work tree, which DeleteNestedRepository does, with all its history.
+var ErrNestedRepository = errors.New("it is a repository of its own, with its history")
+
 func (r *Repo) Discard(f *models.File) error {
+	if f.IsNestedRepository() {
+		return ErrNestedRepository
+	}
+	if err := checkPath(f.Path); err != nil {
+		return err
+	}
 	return r.do(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
+}
+
+// DeleteNestedRepository deletes a repository inside the work tree that
+// isn't a submodule, with all its history.
+func (r *Repo) DeleteNestedRepository(f *models.File) error {
+	if !f.IsNestedRepository() {
+		return errors.New(f.Path + " is not a repository")
+	}
+	if err := checkPath(f.Path); err != nil {
+		return err
+	}
+	return r.do(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
+}
+
+// conflictError is a command stopping with an operation in progress, as
+// a merge on conflicts: known from the repository's state rather than
+// git's words, which follow the user's language.
+type conflictError struct{ err error }
+
+func (e conflictError) Error() string { return e.err.Error() }
+func (e conflictError) Unwrap() error { return e.err }
+
+// doMayConflict is do for commands that stop on conflicts.
+func (r *Repo) doMayConflict(fn func(g *commands.GitCommand) error) error {
+	return r.do(func(g *commands.GitCommand) error {
+		err := fn(g)
+		if err != nil && g.Status.WorkingTreeState().Any() {
+			return conflictError{err}
+		}
+		return err
+	})
 }
 
 // Commits
@@ -80,7 +124,7 @@ func (r *Repo) Commit(summary, description string, amend bool) error {
 // whose todo list lazygit's daemon (see HandleDaemon) edits.
 
 func (r *Repo) DropCommit(commits []*models.Commit, i int) error {
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doMayConflict(func(g *commands.GitCommand) error {
 		if commits[i].IsMerge() {
 			// A merge's todo is a merge line, not a pick to drop.
 			return g.Rebase.DropMergeCommit(commits, i)
@@ -98,13 +142,13 @@ func (r *Repo) FixupCommit(commits []*models.Commit, i int) error {
 	if commits[i].IsMerge() {
 		return errors.New("a merge commit can't be fixed up into another")
 	}
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doMayConflict(func(g *commands.GitCommand) error {
 		return g.Rebase.InteractiveRebase(commits, i, i, todo.Fixup, "")
 	})
 }
 
 func (r *Repo) MoveCommit(commits []*models.Commit, i, delta int) error {
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doMayConflict(func(g *commands.GitCommand) error {
 		if delta < 0 {
 			return g.Rebase.MoveCommitsUp(commits, i, i)
 		}
@@ -159,18 +203,22 @@ func (r *Repo) DeleteBranch(name string, force bool) error {
 	if err := checkRef(name); err != nil {
 		return err
 	}
-	err := r.do(func(g *commands.GitCommand) error { return g.Branch.LocalDelete([]string{name}, force) })
-	if err != nil && !force && strings.Contains(err.Error(), "not fully merged") {
-		return ErrNotMerged
-	}
-	return err
+	return r.do(func(g *commands.GitCommand) error {
+		err := g.Branch.LocalDelete([]string{name}, force)
+		// Whether it was refused for not being merged is known from the
+		// branch, not git's words, which follow the user's language.
+		if err != nil && !force && !g.Branch.IsAncestor(name, "HEAD") {
+			return ErrNotMerged
+		}
+		return err
+	})
 }
 
 func (r *Repo) Merge(name string) error {
 	if err := checkRef(name); err != nil {
 		return err
 	}
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doMayConflict(func(g *commands.GitCommand) error {
 		return g.Branch.Merge(name, git_commands.MERGE_VARIANT_REGULAR)
 	})
 }
@@ -179,7 +227,7 @@ func (r *Repo) RebaseOnto(name string) error {
 	if err := checkRef(name); err != nil {
 		return err
 	}
-	return r.do(func(g *commands.GitCommand) error { return g.Rebase.RebaseBranch(name) })
+	return r.doMayConflict(func(g *commands.GitCommand) error { return g.Rebase.RebaseBranch(name) })
 }
 
 // Remotes
@@ -189,7 +237,7 @@ func (r *Repo) Fetch() error {
 }
 
 func (r *Repo) Pull() error {
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doMayConflict(func(g *commands.GitCommand) error {
 		return g.Sync.Pull(gocui.NewFakeTask(), git_commands.PullOptions{})
 	})
 }

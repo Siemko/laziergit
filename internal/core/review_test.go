@@ -18,8 +18,9 @@ func TestPathsAreLiteral(t *testing.T) {
 	git(t, dir, "commit", "-q", "-m", "magic name")
 	write(t, dir, name, "changed\n")
 	write(t, dir, "one.txt", "one edited\n")
-	if err := r.Discard(fileNamed(t, load(t, r), name)); err != nil {
-		t.Fatal(err)
+	// git would read the name as a pattern of every file: refused.
+	if err := r.Discard(fileNamed(t, load(t, r), name)); err == nil {
+		t.Fatal("discarded a file named as a pattern")
 	}
 	if got := readFile(t, dir, "one.txt"); got != "one edited\n" {
 		t.Fatalf("one.txt lost its edit: %q", got)
@@ -265,5 +266,136 @@ func TestDropMergeCommit(t *testing.T) {
 	}
 	if err := r.FixupCommit(load(t, r).Commits, 0); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Round 2 of the review.
+
+func TestUndoRefusesToOverwriteWhatGitDoesntTrack(t *testing.T) {
+	cases := map[string]func(t *testing.T, dir string){
+		// The target has a file where an untracked directory is.
+		"directory": func(t *testing.T, dir string) {
+			os.MkdirAll(filepath.Join(dir, "two.txt"), 0o755)
+			write(t, dir, "two.txt/precious.txt", "precious\n")
+		},
+		// The target tracks a file the work tree ignores now.
+		"ignored": func(t *testing.T, dir string) {
+			write(t, dir, ".gitignore", "two.txt\n")
+			git(t, dir, "add", ".gitignore")
+			git(t, dir, "commit", "-q", "-m", "ignore two")
+			write(t, dir, "two.txt", "precious\n")
+		},
+		// Untracked files the status hides by config.
+		"hidden by config": func(t *testing.T, dir string) {
+			git(t, dir, "config", "status.showUntrackedFiles", "no")
+			write(t, dir, "two.txt", "precious\n")
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			r, dir := newRepo(t)
+			if err := r.DropCommit(load(t, r).Commits, 1); err != nil { // drops "two"
+				t.Fatal(err)
+			}
+			setup(t, dir)
+			s, err := r.FindUndo(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Kind == UndoCommit {
+				// "ignored" committed after the drop: undo that first.
+				undo(t, r, false)
+				if s, err = r.FindUndo(false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := r.ApplyUndo(s, false); err == nil {
+				t.Fatalf("undo %+v overwrote what git doesn't track", s)
+			}
+			var precious string
+			for _, p := range []string{"two.txt", "two.txt/precious.txt"} {
+				if b, err := os.ReadFile(filepath.Join(dir, p)); err == nil {
+					precious = string(b)
+				}
+			}
+			if precious != "precious\n" {
+				t.Fatalf("lost: %q", precious)
+			}
+		})
+	}
+}
+
+func TestUndoCheckoutToOptionLikeBranchRefused(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "update-ref", "refs/heads/--force", "HEAD")
+	git(t, dir, "symbolic-ref", "HEAD", "refs/heads/--force")
+	git(t, dir, "checkout", "-q", "main")
+	write(t, dir, "one.txt", "edited\n")
+	s, err := r.FindUndo(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ApplyUndo(s, false); err == nil {
+		t.Fatalf("undid %+v", s)
+	}
+	if got := readFile(t, dir, "one.txt"); got != "edited\n" {
+		t.Fatalf("edit lost: %q", got)
+	}
+}
+
+func TestDiscardAllLinesOfUnpatchableNameAffectsOnlyIt(t *testing.T) {
+	r, dir := newRepo(t)
+	name := "target.txt\tother"
+	write(t, dir, "target.txt", "a\n")
+	write(t, dir, name, "a\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "tab")
+	write(t, dir, "target.txt", "b\n")
+	write(t, dir, name, "b\n")
+	f := fileNamed(t, load(t, r), name)
+	diff, _ := r.FileDiff(f, false)
+	if err := r.ApplyLines(f, diff, linesMatching(diff, "a", "b"), DiscardLines); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "target.txt"); got != "b\n" {
+		t.Fatalf("target.txt changed: %q", got)
+	}
+	if got := readFile(t, dir, name); got != "a\n" {
+		t.Fatalf("the file itself: %q", got)
+	}
+}
+
+func TestNestedRepositoryIsNotDiscarded(t *testing.T) {
+	r, dir := newRepo(t)
+	nested := filepath.Join(dir, "vendored")
+	git(t, dir, "init", "-q", nested)
+	git(t, nested, "commit", "-q", "--allow-empty", "-m", "its own history")
+	f := fileNamed(t, load(t, r), "vendored")
+	if err := r.Discard(f); !errors.Is(err, ErrNestedRepository) {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(nested, ".git")); err != nil {
+		t.Fatalf("nested repository gone: %v", err)
+	}
+	if err := r.DeleteNestedRepository(f); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Fatalf("still there: %v", err)
+	}
+}
+
+func TestHooksKeepTheirPatterns(t *testing.T) {
+	r, dir := newRepo(t)
+	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	out := filepath.Join(t.TempDir(), "seen")
+	os.WriteFile(hook, []byte("#!/bin/sh\ngit diff --cached --name-only -- '*.txt' > "+out+"\n"), 0o755)
+	write(t, dir, "four.txt", "four\n")
+	git(t, dir, "add", ".")
+	if err := r.Commit("four", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) != "four.txt" {
+		t.Fatalf("the hook's pattern matched %q", b)
 	}
 }

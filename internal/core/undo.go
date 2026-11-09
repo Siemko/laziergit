@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/jesseduffield/lazygit/pkg/commands"
@@ -161,16 +162,24 @@ func findUndo(reflog []*models.Commit, redo bool) (UndoStep, error) {
 	return UndoStep{}, errors.New("there is nothing to undo")
 }
 
+// ErrStashKept wraps the error of an undo whose local changes, stashed
+// around its reset, didn't apply again: they are in stash@{0}.
+var ErrStashKept = errors.New("your local changes are kept in stash@{0}")
+
 // ApplyUndo undoes (or redoes) a step FindUndo found, marking it in the
 // reflog. A hard reset stashes the work tree's changes around it, as
-// lazygit's does, deciding so as it resets; it refuses to overwrite
-// untracked files the target has, and gives back only the stash it made.
+// lazygit's does, and gives back only the stash it made; it refuses to
+// overwrite files git doesn't track (untracked or ignored) where the
+// target has files.
 func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 	env := []string{"GIT_REFLOG_ACTION=" + undoAction}
 	target := s.From
 	if redo {
 		env = []string{"GIT_REFLOG_ACTION=" + redoAction}
 		target = s.To
+	}
+	if err := checkRef(target); err != nil {
+		return err
 	}
 	return r.do(func(g *commands.GitCommand) error {
 		switch {
@@ -179,17 +188,16 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 		case s.Kind == UndoCommit && !redo:
 			return g.Commit.ResetToCommit(target, "soft", env)
 		}
-		files := g.Loaders.FileLoader.GetStatusFiles(git_commands.GetStatusFileOptions{})
-		if err := r.checkUntrackedAgainst(target, files); err != nil {
+		if err := r.checkUntrackedAgainst(target); err != nil {
 			return err
 		}
-		submodules, _ := g.Submodule.GetConfigs(nil)
-		if !hasTrackedChanges(files, submodules) {
-			return g.Commit.ResetToCommit(target, "hard", env)
-		}
+		// The stash is always asked for, rather than when the status says
+		// the tree is dirty: a status that failed or hides files would
+		// lose them. It saves nothing for a clean tree, which refs/stash
+		// tells.
 		before := r.stashTop()
 		if err := g.Stash.Push(fmt.Sprintf("laziergit auto-stash for undo to %s", short(target))); err != nil {
-			return err
+			return fmt.Errorf("stashing local changes before the reset: %w", err)
 		}
 		stashed := r.stashTop()
 		made := stashed != "" && stashed != before
@@ -203,54 +211,62 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 			return nil
 		}
 		if err := g.Stash.Pop(0); err != nil {
-			return fmt.Errorf("your local changes are kept in stash@{0} (%s), which didn't apply cleanly: %w", short(stashed), err)
+			return fmt.Errorf("%w (%s), which didn't apply cleanly: %w", ErrStashKept, short(stashed), err)
 		}
 		return nil
 	})
 }
 
-// hasTrackedChanges reports whether files tracked or added have changes,
-// which a hard reset would lose: lazygit's
-// IsWorkingTreeDirtyExceptSubmodules. Untracked files aren't stashed.
-func hasTrackedChanges(files []*models.File, submodules []*models.SubmoduleConfig) bool {
-	for _, f := range files {
-		if f.IsSubmodule(submodules) {
-			continue
-		}
-		if f.Tracked || f.HasStagedChanges {
-			return true
+// checkUntrackedAgainst fails when files git doesn't track, untracked or
+// ignored, are where target has files: at a file's path, at a directory
+// of one, or in a directory the target has a file at. A hard reset would
+// overwrite or delete them.
+func (r *Repo) checkUntrackedAgainst(target string) error {
+	// --directory lists a directory of untracked files as itself; without
+	// --exclude-standard, ignored files are listed too.
+	out, err := r.git_("ls-files", "--others", "--directory", "-z")
+	if err != nil {
+		return fmt.Errorf("listing untracked files: %w", err)
+	}
+	var local []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p = strings.TrimSuffix(p, "/"); p != "" {
+			local = append(local, p)
 		}
 	}
-	return false
-}
-
-// checkUntrackedAgainst fails when untracked files are where target has
-// files, which a hard reset to it would overwrite.
-func (r *Repo) checkUntrackedAgainst(target string, files []*models.File) error {
-	untracked := map[string]bool{}
-	for _, f := range files {
-		if f.ShortStatus == "??" {
-			untracked[strings.TrimSuffix(f.Path, "/")] = true
-		}
-	}
-	if len(untracked) == 0 {
+	if len(local) == 0 {
 		return nil
 	}
-	out, err := r.git_("ls-tree", "-r", "-z", "--name-only", target)
+	slices.Sort(local)
+	isLocal := map[string]bool{}
+	for _, p := range local {
+		isLocal[p] = true
+	}
+	tree, err := r.git_("ls-tree", "-r", "-z", "--name-only", target)
 	if err != nil {
 		return err
 	}
 	var hit []string
-	for _, p := range strings.Split(out, "\x00") {
-		for dir := p; dir != "." && dir != ""; dir = filepath.Dir(dir) {
-			if untracked[dir] {
-				hit = append(hit, p)
+	for _, p := range strings.Split(tree, "\x00") {
+		if p == "" {
+			continue
+		}
+		// The file itself, or a directory above it.
+		for dir := p; dir != "." && dir != "/"; dir = filepath.Dir(dir) {
+			if isLocal[dir] {
+				hit = append(hit, dir)
 				break
 			}
 		}
+		// Files under it, as a directory of untracked files where the
+		// target has a file.
+		if i, _ := slices.BinarySearch(local, p+"/"); i < len(local) && strings.HasPrefix(local[i], p+"/") {
+			hit = append(hit, local[i])
+		}
 	}
 	if len(hit) > 0 {
-		return fmt.Errorf("untracked files would be overwritten: %s; move them away first", strings.Join(hit[:min(len(hit), 5)], ", "))
+		hit = slices.Compact(hit)
+		return fmt.Errorf("files git doesn't track would be overwritten: %s; move them away first", strings.Join(hit[:min(len(hit), 5)], ", "))
 	}
 	return nil
 }

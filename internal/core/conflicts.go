@@ -206,6 +206,9 @@ func (r *Repo) ReadConflicted(path string) (string, error) {
 // another app since, rather than overwrite that. With no conflict left in
 // content, the file is staged, as resolved; staged reports it.
 func (r *Repo) ResolveConflict(f *models.File, expected, content string) (staged bool, err error) {
+	if err := checkPath(f.Path); err != nil {
+		return false, err
+	}
 	err = r.do(func(g *commands.GitCommand) error {
 		full, st, err := r.workTreeFile(f.Path)
 		if err != nil {
@@ -255,12 +258,21 @@ func writeAtomically(path, content string, perm os.FileMode) error {
 // MarkResolved stages a file whose conflicts are resolved: one without
 // conflict markers, or a conflict git wrote no markers for.
 func (r *Repo) MarkResolved(f *models.File) error {
-	if f.HasInlineMergeConflicts {
-		if content, err := r.ReadConflicted(f.Path); err == nil && len(ParseConflicts(content, f.ConflictMarkerSize).Conflicts) > 0 {
-			return errConflicted(f.Path)
-		}
+	if err := checkPath(f.Path); err != nil {
+		return err
 	}
-	return r.do(func(g *commands.GitCommand) error { return g.WorkingTree.StageFile(f.Path) })
+	return r.do(func(g *commands.GitCommand) error {
+		// Checked as it stages, under the lock: a file edited since can't
+		// be staged with markers.
+		if f.HasInlineMergeConflicts {
+			if full, _, err := r.workTreeFile(f.Path); err == nil {
+				if b, err := os.ReadFile(full); err == nil && len(ParseConflicts(string(b), f.ConflictMarkerSize).Conflicts) > 0 {
+					return errConflicted(f.Path)
+				}
+			}
+		}
+		return g.WorkingTree.StageFile(f.Path)
+	})
 }
 
 // ContinueOperation continues the merge, rebase, cherry-pick or revert in
@@ -278,16 +290,26 @@ func (r *Repo) operation(st models.WorkingTreeState, command string) error {
 	if st.None() {
 		return errors.New("no merge or rebase is in progress")
 	}
-	return r.do(func(g *commands.GitCommand) error {
+	if command == "abort" {
+		return r.do(func(g *commands.GitCommand) error {
+			return g.Rebase.GenericMergeOrRebaseAction(st.Effective(), command)
+		})
+	}
+	return r.doMayConflict(func(g *commands.GitCommand) error {
 		return g.Rebase.GenericMergeOrRebaseAction(st.Effective(), command)
 	})
 }
 
 // IsConflict reports whether err is git stopping on conflicts, as a merge,
-// rebase, pull or cherry-pick does.
+// rebase, pull or cherry-pick does: known from the operation left in
+// progress, or, for a stash applied, from git's words.
 func IsConflict(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, ErrStashKept) {
 		return false
+	}
+	var ce conflictError
+	if errors.As(err, &ce) {
+		return true
 	}
 	s := err.Error()
 	return strings.Contains(s, "CONFLICT") || strings.Contains(s, "conflict") && strings.Contains(s, "fix")
