@@ -39,9 +39,6 @@ func (r *Repo) ApplyLines(f *models.File, diff string, indices []int, action Lin
 	if f.HasInlineMergeConflicts {
 		return errConflicted(f.Path)
 	}
-	if err := checkPath(f.Path); err != nil {
-		return err
-	}
 	p := patch.Parse(diff)
 	lines := p.Lines()
 	var chosen []int
@@ -73,7 +70,7 @@ func (r *Repo) ApplyLines(f *models.File, diff string, indices []int, action Lin
 		FileNameOverride:    f.Path,
 	}).FormatPlain()
 
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doPaths(func(g *commands.GitCommand) error {
 		if live := g.WorkingTree.WorktreeFileDiff(f, git_commands.DiffModePlain, action == UnstageLines); live != diff {
 			return ErrStale
 		}

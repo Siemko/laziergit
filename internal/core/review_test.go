@@ -18,9 +18,12 @@ func TestPathsAreLiteral(t *testing.T) {
 	git(t, dir, "commit", "-q", "-m", "magic name")
 	write(t, dir, name, "changed\n")
 	write(t, dir, "one.txt", "one edited\n")
-	// git would read the name as a pattern of every file: refused.
-	if err := r.Discard(fileNamed(t, load(t, r), name)); err == nil {
-		t.Fatal("discarded a file named as a pattern")
+	// git reads the name as the file's, not as a pattern of every file.
+	if err := r.Discard(fileNamed(t, load(t, r), name)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, name); got != "x\n" {
+		t.Fatalf("the file itself: %q", got)
 	}
 	if got := readFile(t, dir, "one.txt"); got != "one edited\n" {
 		t.Fatalf("one.txt lost its edit: %q", got)
@@ -397,5 +400,139 @@ func TestHooksKeepTheirPatterns(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) != "four.txt" {
 		t.Fatalf("the hook's pattern matched %q", b)
+	}
+}
+
+// Round 3 of the review.
+
+func TestBracketedPathsAreTheirOwn(t *testing.T) {
+	r, dir := newRepo(t)
+	os.MkdirAll(filepath.Join(dir, "app", "[slug]"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "app", "s"), 0o755)
+	write(t, dir, "app/[slug]/page.tsx", "slug\n")
+	write(t, dir, "app/s/page.tsx", "s\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "routes")
+	write(t, dir, "app/[slug]/page.tsx", "slug edited\n")
+	write(t, dir, "app/s/page.tsx", "s edited\n")
+	f := fileNamed(t, load(t, r), "app/[slug]/page.tsx")
+	diff, err := r.FileDiff(f, false)
+	if err != nil || !strings.Contains(diff, "+slug edited") || strings.Contains(diff, "s edited") {
+		t.Fatalf("diff %v:\n%s", err, diff)
+	}
+	if err := r.ToggleStaged(f); err != nil {
+		t.Fatal(err)
+	}
+	if staged := git(t, dir, "diff", "--cached", "--name-only"); staged != "app/[slug]/page.tsx" {
+		t.Fatalf("staged %q", staged)
+	}
+	if err := r.ToggleStaged(fileNamed(t, load(t, r), "app/[slug]/page.tsx")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Discard(fileNamed(t, load(t, r), "app/[slug]/page.tsx")); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "app/s/page.tsx"); got != "s edited\n" {
+		t.Fatalf("the other route lost its edit: %q", got)
+	}
+	if got := readFile(t, dir, "app/[slug]/page.tsx"); got != "slug\n" {
+		t.Fatalf("not discarded: %q", got)
+	}
+}
+
+func TestRenameFromPatternNameAffectsOnlyIt(t *testing.T) {
+	r, dir := newRepo(t)
+	name := ":(glob)*"
+	write(t, dir, name, "x\n")
+	git(t, dir, "add", "--", name)
+	git(t, dir, "commit", "-q", "-m", "magic name")
+	git(t, dir, "mv", "--", name, "normal.txt")
+	write(t, dir, "one.txt", "one edited\n")
+	write(t, dir, "two.txt", "two staged\n")
+	git(t, dir, "add", "two.txt")
+	f := fileNamed(t, load(t, r), "normal.txt")
+	if f.PreviousPath != name {
+		t.Fatalf("not a rename: %+v", f)
+	}
+	// Unstaging the rename leaves the other staged change staged.
+	if err := r.ToggleStaged(f); err != nil {
+		t.Fatal(err)
+	}
+	if staged := git(t, dir, "diff", "--cached", "--name-only"); staged != "two.txt" && !strings.Contains(staged, "two.txt") {
+		t.Fatalf("staged after unstaging the rename: %q", staged)
+	}
+	// Discarding it (staged again) leaves one.txt's edit.
+	git(t, dir, "add", "-A", "--", "normal.txt", name)
+	if err := r.Discard(fileNamed(t, load(t, r), "normal.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "one.txt"); got != "one edited\n" {
+		t.Fatalf("one.txt lost its edit: %q", got)
+	}
+	if got := git(t, dir, "diff", "--cached", "--name-only", "--", "two.txt"); got != "two.txt" {
+		t.Fatalf("two.txt not staged any more: %q", got)
+	}
+}
+
+func TestUndoWritesIntoUntrackedDirectory(t *testing.T) {
+	r, dir := newRepo(t)
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	write(t, dir, "docs/guide.md", "guide\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "docs")
+	git(t, dir, "rm", "-q", "-r", "docs")
+	git(t, dir, "commit", "-q", "-m", "no docs")
+	// Finder leaves a file in the folder: the undo writes guide.md beside it.
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	write(t, dir, "docs/.DS_Store", "finder\n")
+	undo(t, r, false) // the commit "no docs", softly
+	git(t, dir, "reset", "-q", "--hard", "HEAD")
+	if got := readFile(t, dir, "docs/guide.md"); got != "guide\n" {
+		t.Fatalf("guide.md %q", got)
+	}
+	if got := readFile(t, dir, "docs/.DS_Store"); got != "finder\n" {
+		t.Fatalf(".DS_Store %q", got)
+	}
+}
+
+func TestUndoHardIntoUntrackedDirectory(t *testing.T) {
+	r, dir := newRepo(t)
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	write(t, dir, "docs/guide.md", "guide\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "docs")
+	// Drop "docs" by a rebase, whose undo is a hard reset to it.
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	write(t, dir, "docs/.DS_Store", "finder\n")
+	if s := undo(t, r, false); s.Kind != UndoRebase {
+		t.Fatalf("undid %+v", s)
+	}
+	if got := readFile(t, dir, "docs/guide.md"); got != "guide\n" {
+		t.Fatalf("guide.md %q", got)
+	}
+	// A file of its own at a path the target writes is refused.
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "docs/guide.md", "my own guide\n")
+	s, _ := r.FindUndo(false)
+	if err := r.ApplyUndo(s, false); err == nil {
+		t.Fatal("overwrote an untracked file in an untracked directory")
+	}
+	if got := readFile(t, dir, "docs/guide.md"); got != "my own guide\n" {
+		t.Fatalf("lost %q", got)
+	}
+}
+
+func TestDeleteBranchMergedToHeadNotUpstream(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "branch", "base", "HEAD~2")
+	git(t, dir, "branch", "old", "HEAD")
+	git(t, dir, "branch", "--set-upstream-to=base", "old")
+	if err := r.DeleteBranch("old", false); !errors.Is(err, ErrNotMerged) {
+		t.Fatalf("delete: %v", err)
 	}
 }

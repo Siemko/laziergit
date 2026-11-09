@@ -89,16 +89,42 @@ var (
 	current *Repo
 )
 
-// checkPath refuses a file name git would read as a pattern of names
-// where it takes a path (a pathspec): a file named "*.go" or ":(glob)*"
-// would stand for others. The process doesn't set GIT_LITERAL_PATHSPECS
-// instead, as git hands it on to hooks, whose own patterns would stop
-// matching.
-func checkPath(path string) error {
-	if strings.ContainsAny(path, "*?[\\") || strings.HasPrefix(path, ":") {
-		return fmt.Errorf("laziergit can't act on %q: git would read its *, ?, [, \\ or leading : as a pattern of other files' names", path)
-	}
-	return nil
+// literalPaths makes git read the paths of the commands fn runs as file
+// names, never patterns: a file named "app/[slug]/page.tsx" or ":(glob)*"
+// stands for itself, not for others it would match. The variable is set
+// only while fn runs, under gitMu, around which every git command of the
+// app runs, rather than for the whole process: git hands it on to hooks,
+// whose own patterns would stop matching. The commands given paths (add,
+// reset, checkout of files, diff, apply) run no commit hooks.
+func literalPaths(fn func() error) error {
+	old, had := os.LookupEnv("GIT_LITERAL_PATHSPECS")
+	os.Setenv("GIT_LITERAL_PATHSPECS", "1")
+	defer func() {
+		if had {
+			os.Setenv("GIT_LITERAL_PATHSPECS", old)
+		} else {
+			os.Unsetenv("GIT_LITERAL_PATHSPECS")
+		}
+	}()
+	return fn()
+}
+
+// doPaths is do for commands given file paths (see literalPaths).
+func (r *Repo) doPaths(fn func(g *commands.GitCommand) error) error {
+	return r.do(func(g *commands.GitCommand) error { return literalPaths(func() error { return fn(g) }) })
+}
+
+// withPaths is with for commands given file paths (see literalPaths).
+func withPaths[T any](r *Repo, fn func() (T, error)) (T, error) {
+	return with(r, func() (T, error) {
+		var v T
+		err := literalPaths(func() error {
+			var err error
+			v, err = fn()
+			return err
+		})
+		return v, err
+	})
 }
 
 // ErrClosed is the error of a command of a repository closed.
@@ -309,10 +335,7 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 // FileDiff is the diff of a file of the work tree: its staged changes, or
 // those not staged yet.
 func (r *Repo) FileDiff(f *models.File, staged bool) (string, error) {
-	if err := checkPath(f.Path); err != nil {
-		return "", err
-	}
-	return with(r, func() (string, error) {
+	return withPaths(r, func() (string, error) {
 		return r.git.WorkingTree.WorktreeFileDiff(f, git_commands.DiffModePlain, staged), nil
 	})
 }
@@ -326,7 +349,7 @@ func (r *Repo) CommitFiles(c *models.Commit) ([]*models.CommitFile, error) {
 
 // CommitFileDiff is the diff of a file a commit changes.
 func (r *Repo) CommitFileDiff(c *models.Commit, f *models.CommitFile) (string, error) {
-	return with(r, func() (string, error) {
+	return withPaths(r, func() (string, error) {
 		return r.git.WorkingTree.ShowFileDiff(c.ParentRefName(), c.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
 	})
 }
@@ -340,7 +363,7 @@ func (r *Repo) StashFiles(e *models.StashEntry) ([]*models.CommitFile, error) {
 
 // StashFileDiff is the diff of a file a stash entry changes.
 func (r *Repo) StashFileDiff(e *models.StashEntry, f *models.CommitFile) (string, error) {
-	return with(r, func() (string, error) {
+	return withPaths(r, func() (string, error) {
 		return r.git.WorkingTree.ShowFileDiff(e.ParentRefName(), e.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
 	})
 }

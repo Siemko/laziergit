@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -218,19 +219,29 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 }
 
 // checkUntrackedAgainst fails when files git doesn't track, untracked or
-// ignored, are where target has files: at a file's path, at a directory
-// of one, or in a directory the target has a file at. A hard reset would
-// overwrite or delete them.
+// ignored, are where target has files, which a hard reset to it would
+// overwrite or delete: a local file at a file's path or at a directory of
+// one, local files in a directory the target has a file at, and, in a
+// local directory of such files, a path the target writes that is there
+// already.
 func (r *Repo) checkUntrackedAgainst(target string) error {
-	// --directory lists a directory of untracked files as itself; without
-	// --exclude-standard, ignored files are listed too.
+	// --directory lists a directory of untracked files as itself, with a
+	// slash; without --exclude-standard, ignored files are listed too.
 	out, err := r.git_("ls-files", "--others", "--directory", "-z")
 	if err != nil {
 		return fmt.Errorf("listing untracked files: %w", err)
 	}
 	var local []string
+	isFile, isDir := map[string]bool{}, map[string]bool{}
 	for _, p := range strings.Split(out, "\x00") {
-		if p = strings.TrimSuffix(p, "/"); p != "" {
+		switch {
+		case p == "":
+		case strings.HasSuffix(p, "/"):
+			p = strings.TrimSuffix(p, "/")
+			isDir[p] = true
+			local = append(local, p)
+		default:
+			isFile[p] = true
 			local = append(local, p)
 		}
 	}
@@ -238,10 +249,6 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		return nil
 	}
 	slices.Sort(local)
-	isLocal := map[string]bool{}
-	for _, p := range local {
-		isLocal[p] = true
-	}
 	tree, err := r.git_("ls-tree", "-r", "-z", "--name-only", target)
 	if err != nil {
 		return err
@@ -251,15 +258,22 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		if p == "" {
 			continue
 		}
-		// The file itself, or a directory above it.
 		for dir := p; dir != "." && dir != "/"; dir = filepath.Dir(dir) {
-			if isLocal[dir] {
-				hit = append(hit, dir)
+			if isFile[dir] {
+				hit = append(hit, dir) // a local file where the target has a file or a directory
+				break
+			}
+			if isDir[dir] {
+				// A directory of local files at the path itself, which the
+				// reset would replace by a file; or above it, which the
+				// reset writes into, overwriting only what is in its way.
+				if dir == p || r.inTheWay(dir, p) {
+					hit = append(hit, p)
+				}
 				break
 			}
 		}
-		// Files under it, as a directory of untracked files where the
-		// target has a file.
+		// Local files under a path the target has a file at.
 		if i, _ := slices.BinarySearch(local, p+"/"); i < len(local) && strings.HasPrefix(local[i], p+"/") {
 			hit = append(hit, local[i])
 		}
@@ -269,6 +283,22 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		return fmt.Errorf("files git doesn't track would be overwritten: %s; move them away first", strings.Join(hit[:min(len(hit), 5)], ", "))
 	}
 	return nil
+}
+
+// inTheWay reports whether writing the file p, under the local directory
+// dir, meets something there: the file itself, or a file where p needs a
+// directory.
+func (r *Repo) inTheWay(dir, p string) bool {
+	for q := p; q != dir && q != "." && q != "/"; q = filepath.Dir(q) {
+		st, err := os.Lstat(filepath.Join(r.Path, q))
+		if err != nil {
+			continue
+		}
+		if q == p || !st.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 // stashTop is the commit refs/stash points at, empty for no stash.
@@ -313,5 +343,5 @@ func (r *Repo) CherryPick(commits []*models.Commit) error {
 	if len(commits) == 0 {
 		return errors.New("no commits to cherry-pick")
 	}
-	return r.do(func(g *commands.GitCommand) error { return g.Rebase.CherryPickCommits(commits) })
+	return r.doMayConflict(func(g *commands.GitCommand) error { return g.Rebase.CherryPickCommits(commits) })
 }

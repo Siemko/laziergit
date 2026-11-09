@@ -206,13 +206,13 @@ func (r *Repo) ReadConflicted(path string) (string, error) {
 // another app since, rather than overwrite that. With no conflict left in
 // content, the file is staged, as resolved; staged reports it.
 func (r *Repo) ResolveConflict(f *models.File, expected, content string) (staged bool, err error) {
-	if err := checkPath(f.Path); err != nil {
-		return false, err
-	}
-	err = r.do(func(g *commands.GitCommand) error {
+	err = r.doPaths(func(g *commands.GitCommand) error {
 		full, st, err := r.workTreeFile(f.Path)
 		if err != nil {
 			return err
+		}
+		if st.Size() > maxConflictedSize {
+			return fmt.Errorf("%s is too large to resolve here", f.Path)
 		}
 		now, err := os.ReadFile(full)
 		if err != nil {
@@ -258,14 +258,11 @@ func writeAtomically(path, content string, perm os.FileMode) error {
 // MarkResolved stages a file whose conflicts are resolved: one without
 // conflict markers, or a conflict git wrote no markers for.
 func (r *Repo) MarkResolved(f *models.File) error {
-	if err := checkPath(f.Path); err != nil {
-		return err
-	}
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doPaths(func(g *commands.GitCommand) error {
 		// Checked as it stages, under the lock: a file edited since can't
 		// be staged with markers.
 		if f.HasInlineMergeConflicts {
-			if full, _, err := r.workTreeFile(f.Path); err == nil {
+			if full, st, err := r.workTreeFile(f.Path); err == nil && st.Size() <= maxConflictedSize {
 				if b, err := os.ReadFile(full); err == nil && len(ParseConflicts(string(b), f.ConflictMarkerSize).Conflicts) > 0 {
 					return errConflicted(f.Path)
 				}

@@ -300,6 +300,11 @@ func (m *manager) beforeQuit(e *mygo.QuitEvent) {
 				e.PreventDefault()
 				m.quitWhenIdle = true
 				debugf("quit waits for window %d", w.win.ID())
+				for _, x := range m.windows {
+					if x.app.Busy() {
+						x.win.Update(func() { x.app.Notice("Quitting when git finishes", "Press ⌘Q again to quit now.") })
+					}
+				}
 				return
 			}
 		}

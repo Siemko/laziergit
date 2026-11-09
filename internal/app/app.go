@@ -238,6 +238,11 @@ func (a *App) Close() {
 	}
 }
 
+// Notice shows a message in the window, as a toast.
+func (a *App) Notice(title, desc string) {
+	a.toasts = append(a.toasts, toastReq{title: title, desc: desc, kind: "info"})
+}
+
 // Busy reports whether an action runs or waits to.
 func (a *App) Busy() bool { return a.busy > 0 }
 

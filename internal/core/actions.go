@@ -18,10 +18,7 @@ func (r *Repo) ToggleStaged(f *models.File) error {
 	if f.HasUnstagedChanges && f.HasInlineMergeConflicts {
 		return errConflicted(f.Path)
 	}
-	if err := checkPath(f.Path); err != nil {
-		return err
-	}
-	return r.do(func(g *commands.GitCommand) error {
+	return r.doPaths(func(g *commands.GitCommand) error {
 		if f.HasUnstagedChanges {
 			return g.WorkingTree.StageFile(f.Path)
 		}
@@ -61,10 +58,7 @@ func (r *Repo) Discard(f *models.File) error {
 	if f.IsNestedRepository() {
 		return ErrNestedRepository
 	}
-	if err := checkPath(f.Path); err != nil {
-		return err
-	}
-	return r.do(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
+	return r.doPaths(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
 }
 
 // DeleteNestedRepository deletes a repository inside the work tree that
@@ -73,10 +67,7 @@ func (r *Repo) DeleteNestedRepository(f *models.File) error {
 	if !f.IsNestedRepository() {
 		return errors.New(f.Path + " is not a repository")
 	}
-	if err := checkPath(f.Path); err != nil {
-		return err
-	}
-	return r.do(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
+	return r.doPaths(func(g *commands.GitCommand) error { return g.WorkingTree.DiscardAllFileChanges(f) })
 }
 
 // conflictError is a command stopping with an operation in progress, as
@@ -90,8 +81,9 @@ func (e conflictError) Unwrap() error { return e.err }
 // doMayConflict is do for commands that stop on conflicts.
 func (r *Repo) doMayConflict(fn func(g *commands.GitCommand) error) error {
 	return r.do(func(g *commands.GitCommand) error {
+		before := g.Status.WorkingTreeState()
 		err := fn(g)
-		if err != nil && g.Status.WorkingTreeState().Any() {
+		if err != nil && g.Status.WorkingTreeState().Any() && before != g.Status.WorkingTreeState() {
 			return conflictError{err}
 		}
 		return err
@@ -197,6 +189,13 @@ func (r *Repo) NewBranch(name, base string) error {
 // commits no other branch has.
 var ErrNotMerged = errors.New("the branch isn't fully merged")
 
+// branchExists reports whether a local branch is there; the repository must
+// be current.
+func (r *Repo) branchExists(name string) bool {
+	_, err := r.git_("rev-parse", "-q", "--verify", "refs/heads/"+name)
+	return err == nil
+}
+
 // DeleteBranch deletes a branch: unless force, only one merged, failing
 // with ErrNotMerged otherwise.
 func (r *Repo) DeleteBranch(name string, force bool) error {
@@ -207,8 +206,10 @@ func (r *Repo) DeleteBranch(name string, force bool) error {
 		err := g.Branch.LocalDelete([]string{name}, force)
 		// Whether it was refused for not being merged is known from the
 		// branch, not git's words, which follow the user's language.
-		if err != nil && !force && !g.Branch.IsAncestor(name, "HEAD") {
-			return ErrNotMerged
+		// git refuses a branch not merged into HEAD or into its upstream:
+		// still there after a failed delete, it is one of those.
+		if err != nil && !force && r.branchExists(name) {
+			return fmt.Errorf("%w: %w", ErrNotMerged, err)
 		}
 		return err
 	})
