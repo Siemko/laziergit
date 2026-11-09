@@ -1,7 +1,7 @@
 {
   "name": "laziergit",
   "identifier": "io.github.siemko.laziergit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "copyright": "© 2026 Dominik Guzy",
   "out": "build"
 }
