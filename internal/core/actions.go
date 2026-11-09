@@ -92,8 +92,7 @@ func (r *Repo) RewordCommit(commits []*models.Commit, i int, summary, descriptio
 }
 
 func (r *Repo) CommitMessage(c *models.Commit) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return r.git.Commit.GetCommitMessage(c.Hash())
 }
 

@@ -72,13 +72,8 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 }
 
 func (a *App) openFolder() {
-	if a.host.OpenFolder == nil {
-		return
-	}
-	if dir := a.host.OpenFolder(); dir != "" {
-		if err := a.Open(dir); err != nil {
-			a.toastErr(err)
-		}
+	if a.host.OpenRepository != nil {
+		a.host.OpenRepository()
 	}
 }
 

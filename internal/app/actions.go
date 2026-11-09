@@ -44,7 +44,7 @@ func (a *App) actions() []action {
 		}},
 		{title: "Refresh", mods: ui.Cmd, key: ui.KeyR, keyName: "⌘R", enabled: true, run: func() { a.refresh(false) }},
 		{title: "Toggle Command Log", mods: ui.Cmd, key: ui.KeyL, keyName: "⌘L", enabled: true, run: func() { a.logOpen = !a.logOpen }},
-		{title: "Open Repository…", mods: ui.Cmd, key: ui.KeyO, keyName: "⌘O", enabled: true, run: a.openFolder},
+		{title: "Open Repository…", enabled: true, run: a.openFolder},
 		{title: "Toggle Split / Unified Diff", mods: ui.Alt, key: ui.KeyS, keyName: "⌥S", enabled: true, run: func() { a.unified = 1 - a.unified }},
 
 		{title: "Undo", key: ui.KeyZ, keyName: "z", enabled: s != nil, run: func() { a.undo(false) }},

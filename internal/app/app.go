@@ -4,6 +4,7 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -44,8 +45,15 @@ type Host struct {
 	Post func(fn func())
 	// Go runs fn off the UI thread.
 	Go func(fn func())
-	// OpenFolder asks for a repository's folder; empty when cancelled.
-	OpenFolder func() string
+	// OpenRepository asks for a repository to open, and opens it: in this
+	// window while it has none, in a window of its own otherwise.
+	OpenRepository func()
+	// Opened is told of the repository the window opened.
+	Opened func(r *core.Repo)
+	// Recent lists the repositories opened lately, newest first, and
+	// OpenRecent opens one, as OpenRepository does.
+	Recent     func() []string
+	OpenRecent func(path string)
 	// Watch, when set, watches the work tree of a repository opened, to
 	// call App.ChangedOnDisk on the UI thread, in place of the last one.
 	Watch func(path string)
@@ -165,7 +173,18 @@ func (a *App) Open(dir string) error {
 	if a.host.Watch != nil {
 		a.host.Watch(r.Path)
 	}
+	if a.host.Opened != nil {
+		a.host.Opened(r)
+	}
 	return nil
+}
+
+// Close closes the repository, as the window closes.
+func (a *App) Close() {
+	if a.repo != nil {
+		a.repo.Close()
+		a.repo = nil
+	}
 }
 
 // ChangedOnDisk refreshes after the work tree or the repository changed
@@ -406,20 +425,44 @@ func emptyState(c *ui.Context, pal *palette, svg *ui.SVG, title, hint string) {
 
 func (a *App) welcome(c *ui.Context, pal *palette) {
 	tt := c.Theme()
+	var recent []string
+	if a.host.Recent != nil {
+		recent = a.host.Recent()
+	}
 	ui.Column(c).Fill().Background(tt.Background).Children(func() {
 		ui.Box(c).Height(titleBarHeight).Shrink(0).DragWindow()
-		ui.Column(c).Grow(1).Center().Gap(14).Children(func() {
+		ui.Column(c).Grow(1).Center().Gap(14).Padding(0, 0, titleBarHeight, 0).Children(func() {
 			ui.Icon(c, iconBranch).FontSize(44).TextColor(tt.Accent)
 			ui.Text(c, "laziergit").FontSize(24).Bold()
 			ui.Text(c, "lazygit's power, as a native app.").TextColor(pal.muted)
 			if a.openErr != "" {
 				ui.Text(c, a.openErr).FontSize(12).TextColor(pal.deleted).MaxWidth(420).TextAlign(ui.Center)
 			}
-			if ui.PrimaryButton(c, "Open Repository…").Margin(8, 0, 0, 0).Clicked() && a.host.OpenFolder != nil {
-				if dir := a.host.OpenFolder(); dir != "" {
-					_ = a.Open(dir)
-				}
+			if ui.PrimaryButton(c, "Open Repository…").Margin(8, 0, 0, 0).Tooltip("⌘O").Clicked() {
+				a.openFolder()
 			}
+			if len(recent) == 0 {
+				return
+			}
+			ui.Column(c).Width(380).Margin(18, 0, 0, 0).Gap(2).Children(func() {
+				ui.Text(c, "Recent").FontSize(11).FontWeight(600).TextColor(pal.muted).Padding(0, 10, 4, 10)
+				for _, path := range recent[:min(len(recent), 8)] {
+					b := ui.ButtonBase(c.Key(path)).Padding(7, 10).Gap(10).Radius(7).AlignItems(ui.Center).Label(path)
+					if b.Hovered() {
+						b.Background(pal.hover)
+					}
+					b.Children(func() {
+						ui.Icon(c, iconFolder).FontSize(15).TextColor(tt.Accent)
+						ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+							ui.Text(c, filepath.Base(path)).FontSize(13).FontWeight(500).SingleLine()
+							ui.Text(c, abbreviateHome(filepath.Dir(path))).FontSize(11).TextColor(pal.muted).SingleLine()
+						})
+					})
+					if b.Clicked() && a.host.OpenRecent != nil {
+						a.host.OpenRecent(path)
+					}
+				}
+			})
 		})
 	})
 }

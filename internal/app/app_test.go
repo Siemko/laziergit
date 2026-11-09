@@ -456,3 +456,29 @@ func TestCherryPickAndUndo(t *testing.T) {
 		t.Fatalf("after redo HEAD is %q", head)
 	}
 }
+
+func TestWelcomeRecent(t *testing.T) {
+	var opened string
+	asked := false
+	a := New(Host{
+		Post:           func(fn func()) { fn() },
+		Go:             func(fn func()) { fn() },
+		Recent:         func() []string { return []string{"/Users/ada/code/engine", "/Users/ada/code/notes"} },
+		OpenRecent:     func(p string) { opened = p },
+		OpenRepository: func() { asked = true },
+	}, core.Options{})
+	tt := ui.NewTester(a.View, 1100, 720)
+	if !tt.HasText("engine") || !tt.HasText("notes") || !tt.HasText("Recent") {
+		t.Fatalf("no recent repositories: %q", tt.Texts())
+	}
+	snapshot(t, tt, "welcome")
+	if err := tt.Click("notes"); err != nil {
+		t.Fatal(err)
+	}
+	if opened != "/Users/ada/code/notes" {
+		t.Fatalf("opened %q", opened)
+	}
+	if err := tt.Click("Open Repository…"); err != nil || !asked {
+		t.Fatalf("open repository: %v, asked %v", err, asked)
+	}
+}

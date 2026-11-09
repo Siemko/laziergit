@@ -18,6 +18,7 @@ import (
 	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
 	"github.com/jesseduffield/lazygit/pkg/common"
 	"github.com/jesseduffield/lazygit/pkg/config"
+	"github.com/jesseduffield/lazygit/pkg/env"
 	"github.com/jesseduffield/lazygit/pkg/i18n"
 	"github.com/jesseduffield/lazygit/pkg/utils"
 	"github.com/sirupsen/logrus"
@@ -54,9 +55,15 @@ type Options struct {
 }
 
 // Repo is an open repository. Its methods run git and block; call them off
-// the UI thread. They are serialized: one command runs at a time.
+// the UI thread.
+//
+// Several repositories can be open at once, one per window. lazygit's
+// commands assume one repository per process, though: it changes the
+// process's working directory and git's environment for it, and some of
+// its file operations go by paths relative to the working directory. So
+// the repositories take turns: one command runs at a time, in the whole
+// process, with its repository current (see enter).
 type Repo struct {
-	mu           sync.Mutex
 	cmn          *common.Common
 	osCmd        *oscommands.OSCommand
 	git          *commands.GitCommand
@@ -68,14 +75,47 @@ type Repo struct {
 	Path string
 }
 
-// Open opens the repository dir is in. lazygit's commands run in the
-// process's working directory, which Open changes: a process has one open
-// repository at a time.
+var (
+	// gitMu is held while a command of any repository runs.
+	gitMu sync.Mutex
+	// current is the repository the working directory and git's
+	// environment are set for, under gitMu.
+	current *Repo
+)
+
+// enter waits for the commands of other repositories to finish, and makes
+// r current: the working directory its work tree, and git's environment
+// its own. It returns the function that leaves.
+func (r *Repo) enter() (leave func()) {
+	gitMu.Lock()
+	if current != r {
+		if err := os.Chdir(r.Path); err != nil {
+			r.cmn.Log.Error(err)
+		}
+		env.SetGitLocationEnvVars(r.git.RepoPaths.GitLocationEnvVars())
+		current = r
+	}
+	return gitMu.Unlock
+}
+
+// Open opens the repository dir is in. lazygit's constructor changes the
+// working directory and git's environment, so it takes its turn as
+// commands do.
 func Open(dir string, opts Options) (*Repo, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
+	gitMu.Lock()
+	defer gitMu.Unlock()
+	// A failed Open leaves the directory as it was for the repository
+	// current; a new one is current when it opens.
+	defer func() {
+		if current != nil {
+			_ = os.Chdir(current.Path)
+			env.SetGitLocationEnvVars(current.git.RepoPaths.GitLocationEnvVars())
+		}
+	}()
 	if err := os.Chdir(abs); err != nil {
 		return nil, err
 	}
@@ -126,7 +166,7 @@ func Open(dir string, opts Options) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Repo{
+	r := &Repo{
 		cmn:          cmn,
 		osCmd:        osCmd,
 		git:          git,
@@ -134,11 +174,20 @@ func Open(dir string, opts Options) (*Repo, error) {
 		hashPool:     &utils.StringPool{},
 		tempDir:      tempDir,
 		Path:         git.RepoPaths.WorktreePath(),
-	}, nil
+	}
+	current = r
+	return r, nil
 }
 
 // Close removes the repository's temporary files.
-func (r *Repo) Close() { os.RemoveAll(r.tempDir) }
+func (r *Repo) Close() {
+	gitMu.Lock()
+	if current == r {
+		current = nil
+	}
+	gitMu.Unlock()
+	os.RemoveAll(r.tempDir)
+}
 
 // Name is the work tree's directory name.
 func (r *Repo) Name() string { return filepath.Base(r.Path) }
@@ -166,8 +215,7 @@ type Snapshot struct {
 // Load reads the repository's state. background marks a refresh the user
 // didn't ask for, which takes no optional locks.
 func (r *Repo) Load(background bool) (*Snapshot, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return r.load(background)
 }
 
@@ -208,42 +256,36 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 // FileDiff is the diff of a file of the work tree: its staged changes, or
 // those not staged yet.
 func (r *Repo) FileDiff(f *models.File, staged bool) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return r.git.WorkingTree.WorktreeFileDiff(f, git_commands.DiffModePlain, staged)
 }
 
 // CommitFiles lists the files a commit changes, against its first parent.
 func (r *Repo) CommitFiles(c *models.Commit) ([]*models.CommitFile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return r.git.Loaders.CommitFileLoader.GetFilesInDiff(c.ParentRefName(), c.RefName(), false)
 }
 
 // CommitFileDiff is the diff of a file a commit changes.
 func (r *Repo) CommitFileDiff(c *models.Commit, f *models.CommitFile) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return r.git.WorkingTree.ShowFileDiff(c.ParentRefName(), c.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
 }
 
 // StashFiles lists the files a stash entry changes.
 func (r *Repo) StashFiles(e *models.StashEntry) ([]*models.CommitFile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return r.git.Loaders.CommitFileLoader.GetFilesInDiff(e.ParentRefName(), e.RefName(), false)
 }
 
 // StashFileDiff is the diff of a file a stash entry changes.
 func (r *Repo) StashFileDiff(e *models.StashEntry, f *models.CommitFile) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return r.git.WorkingTree.ShowFileDiff(e.ParentRefName(), e.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
 }
 
 func (r *Repo) do(fn func(g *commands.GitCommand) error) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	return cleanError(fn(r.git))
 }
 

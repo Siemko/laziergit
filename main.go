@@ -1,20 +1,18 @@
 // laziergit is lazygit's functionality in a native desktop app.
 //
-//	go tool mygo dev            # or: go run . [repository]
+//	go tool mygo dev            # or: go run . [repository…]
 package main
 
 import (
-	"context"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 
-	"laziergit/internal/app"
 	"laziergit/internal/core"
 )
 
@@ -24,66 +22,87 @@ func main() {
 	if core.HandleDaemon() {
 		return
 	}
+	// Started from Finder or the Dock, the app has launchd's PATH, which
+	// misses Homebrew's git, gpg, git-lfs and the tools hooks run.
+	importLoginPath()
+	debugf("PATH %s", os.Getenv("PATH"))
 
-	dir := ""
-	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
-		dir = os.Args[1]
-	} else if wd, err := os.Getwd(); err == nil && wd != "/" {
-		dir = wd // run from a terminal; an app started from Finder has "/"
+	capture := os.Getenv("LAZIERGIT_CAPTURE")
+	// Started again, as from a terminal, the app gives its arguments to
+	// the instance running, which opens their repositories.
+	if capture == "" && !mygo.App.RequestSingleInstanceLock() {
+		return
 	}
 
-	var win *mygo.Window
-	var a *app.App
-	var stopWatch context.CancelFunc = func() {}
-	a = app.New(app.Host{
-		Post: func(fn func()) {
-			if win != nil {
-				win.Update(fn)
-			}
-		},
-		Go: func(fn func()) { go fn() },
-		OpenFolder: func() string {
-			paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-				Parent: win, Title: "Open Repository", ButtonLabel: "Open", Directory: true,
-			})
-			if err != nil || len(paths) == 0 {
-				return ""
-			}
-			return paths[0]
-		},
-		// Watch refreshes the window as the repository changes on disk, as
-		// when another program commits or edits files.
-		Watch: func(path string) {
-			stopWatch()
-			var ctx context.Context
-			ctx, stopWatch = context.WithCancel(context.Background())
-			go watchRepo(ctx, win, a, path)
-		},
-	}, core.Options{ConfigDir: configDir()})
+	m := newManager(configDir())
+	// args are the second instance's, without its program's name.
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		debugf("second instance in %s: %q", workingDir, args)
+		dirs := repoArgs(args, workingDir)
+		if len(dirs) == 0 {
+			m.focusOrNew()
+		}
+		for _, d := range dirs {
+			m.open(d, nil)
+		}
+	})
+	// A repository chosen in Open Recent, or dropped on the Dock icon.
+	mygo.App.OnOpenFile(func(path string) { m.open(path, nil) })
+	// The app stays with its Dock icon when its last window closes, as Mac
+	// apps do, and opens one when the icon is clicked.
+	mygo.App.OnWindowAllClosed(func() {
+		if runtime.GOOS != "darwin" {
+			mygo.App.Quit()
+		}
+	})
+	mygo.App.OnActivate(func(hasVisibleWindows bool) {
+		if !hasVisibleWindows {
+			m.newWindow("")
+		}
+	})
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { m.quitting() })
 
 	mygo.App.WhenReady(func() {
-		win = mygo.NewWindow(mygo.WindowOptions{
-			Title:          "laziergit",
-			Width:          1320,
-			Height:         860,
-			MinWidth:       880,
-			MinHeight:      520,
-			StateKey:       "main",
-			TitleBarStyle:  mygo.TitleBarHiddenInset,
-			TitleBarHeight: 52,
-			Vibrancy:       mygo.VibrancySidebar,
-			Content:        ui.View(a.View),
-		})
-		if dir != "" {
-			win.Update(func() {
-				_ = a.Open(dir)
-			})
+		mygo.App.SetMenu(m.menu())
+		m.refreshRecent()
+		dirs := repoArgs(os.Args[1:], "")
+		if len(dirs) == 0 {
+			if wd, err := os.Getwd(); err == nil && wd != "/" && isRepo(wd) {
+				dirs = []string{wd} // run from a terminal in a repository
+			} else {
+				dirs = m.lastSession()
+			}
 		}
-		captureIfAsked(win, a)
+		for _, d := range dirs {
+			m.open(d, nil)
+		}
+		if len(m.windows) == 0 {
+			m.newWindow("")
+		}
+		if capture != "" {
+			captureFirst(m, capture)
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// repoArgs is the arguments that name directories, resolved against wd.
+func repoArgs(args []string, wd string) []string {
+	var out []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if !filepath.IsAbs(a) && wd != "" {
+			a = filepath.Join(wd, a)
+		}
+		if st, err := os.Stat(a); err == nil && st.IsDir() {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func configDir() string {
@@ -93,46 +112,18 @@ func configDir() string {
 	return ""
 }
 
-func watchRepo(ctx context.Context, win *mygo.Window, a *app.App, path string) {
-	w, err := mygo.WatchFiles(ctx, path, mygo.FileWatchOptions{
-		Recursive: true,
-		HintsOnly: true,
-		Debounce:  250 * time.Millisecond,
-		Ignore: func(p string, isDir bool) bool {
-			switch p {
-			case ".git/objects", ".git/logs", ".git/lfs", "node_modules":
-				return true
-			}
-			return false
-		},
-	})
-	if err != nil {
-		log.Printf("watching %s: %v", path, err)
-		return
-	}
-	defer w.Close()
-	for {
-		if _, err := w.Next(ctx); err != nil {
-			return
-		}
-		win.Update(func() { a.ChangedOnDisk() })
-	}
-}
-
-// captureIfAsked writes a PNG of the window to $LAZIERGIT_CAPTURE once it
-// has loaded, then quits: for checking how the app looks from scripts.
-func captureIfAsked(win *mygo.Window, a *app.App) {
-	path := os.Getenv("LAZIERGIT_CAPTURE")
-	if path == "" {
-		return
-	}
+// captureFirst writes a PNG of the first window to path once it has
+// loaded, then quits: for checking how the app looks from scripts.
+// LAZIERGIT_CAPTURE_SECTION shows a section first.
+func captureFirst(m *manager, path string) {
+	w := m.windows[0]
 	go func() {
 		if s := os.Getenv("LAZIERGIT_CAPTURE_SECTION"); s != "" {
 			time.Sleep(2 * time.Second)
-			win.Update(func() { a.ShowSection(s) })
+			w.win.Update(func() { w.app.ShowSection(s) })
 		}
 		time.Sleep(3 * time.Second)
-		png, err := win.CapturePage()
+		png, err := w.win.CapturePage()
 		if err != nil {
 			log.Println("capture:", err)
 		} else if err := os.WriteFile(path, png, 0o644); err != nil {

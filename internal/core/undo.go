@@ -75,8 +75,7 @@ var errMidRebase = errors.New("can't undo or redo in the middle of a rebase")
 // FindUndo finds the step undo (or redo) would take, walking the reflog as
 // lazygit does: each undo counts one step back, each redo one forward.
 func (r *Repo) FindUndo(redo bool) (UndoStep, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	if r.git.Status.WorkingTreeState().Any() {
 		return UndoStep{}, errMidRebase
 	}
@@ -197,8 +196,7 @@ func HasTrackedChanges(files []*models.File) bool {
 
 // BranchCommits loads the latest commits of a branch, with their graph.
 func (r *Repo) BranchCommits(b *models.Branch, limit int) ([]*models.Commit, [][]Pipe, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.enter()()
 	commits, err := r.git.Loaders.CommitLoader.GetCommits(git_commands.GetCommitsOptions{
 		Limit:              limit,
 		RefName:            b.FullRefName(),

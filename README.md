@@ -37,12 +37,14 @@ window, then quit.
 | Undo / redo | lazygit's reflog undo (`z`, `Z`), interoperable with lazygit's: commits, resets, pulls, checkouts and rebases, and also cherry-picks, reverts and merges; a hard reset stashes local changes around it |
 | Stash | stash all, pop, apply, drop; files and diff |
 | Remotes | fetch, pull, push (sets the upstream on first push), force-push with lease; username/password/passphrase prompts |
+| Windows | a window per repository (⌘N, ⌘O, File → Open Recent, the Window menu); opening one already open brings its window to the front; `laziergit <path>` from a terminal opens it in the app running; the windows of the last session open again; each window keeps its place |
 | App | vibrant sidebar, ⌘K command palette, lazygit's single-key bindings (`1`–`4`, `j`/`k`, `space`, `a`, `c`, `d`, `r`, `f`, `p`, `P`, `s`, `g`, `n`, `M`, `⌃j`/`⌃k`), status-bar key hints, context menus, toasts, command log (⌘L), auto-refresh on disk changes, light and dark |
 
 ## Layout
 
 ```
-main.go             the window; runs lazygit's rebase daemon when git starts it
+main.go             startup: lazygit's rebase daemon, the login shell's PATH, a single instance
+windows.go          the windows, their menus, recent repositories and the session
 internal/core       a thin adapter over lazygit's GitCommand: Open, Load (a Snapshot), actions
 internal/core/graph lazygit's commit-graph layout, kept as geometry (its pipes are unexported upstream)
 internal/app        the MyGo views: sidebar, lists, diffs, dialogs, the action registry
@@ -64,6 +66,13 @@ These are from lazygit, still to port:
 - remote-branch and tag panels
 - settings
 
-Two limitations in this proof of concept:
-- One repository per process, because lazygit changes the working directory.
+Limitations:
+- lazygit assumes one repository per process: it changes the working
+  directory and git's environment, and some of its file operations go by
+  relative paths. Windows' repositories take turns (`core.Repo.enter`), so a
+  long push in one window holds back the others' git commands until it ends.
 - It uses lazygit's config format, kept in `~/Library/Application Support/laziergit`.
+
+Started from Finder or the Dock, the app takes its `PATH` from your login
+shell, so that git finds Homebrew's tools (gpg, git-lfs, credential helpers)
+and hooks find theirs. `LAZIERGIT_DEBUG=1` logs what the windows do.
