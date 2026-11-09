@@ -213,17 +213,32 @@ func (a *App) conflictPane(c *ui.Context, pal *palette, f *models.File) {
 		return
 	}
 	n := len(v.file.Conflicts)
-	paneHeader(c, pal, f.Path, func() {
-		ui.Text(c, plural(n, "conflict")+" left").FontSize(12).TextColor(pal.conflict).FontWeight(600)
-		if ui.Button(c, "Undo").Disabled(len(v.undo) == 0).Tooltip("Undo (z)").Clicked() {
+	pathHeader(c, pal, f.Path, func() {
+		count := plural(n, "conflict")
+		if a.detailW >= 520 {
+			count += " left"
+		}
+		ui.Text(c, count).FontSize(12).TextColor(pal.conflict).FontWeight(600).SingleLine().Shrink(0)
+		if iconButton(c, iconUndo, "Undo resolution (z)", false).Disabled(len(v.undo) == 0).Clicked() {
 			a.undoConflict(f)
 		}
-		if ui.Button(c, "All Current").Disabled(n == 0).Tooltip("Keep the current side of every conflict").Clicked() {
-			a.resolveConflict(f, -1, core.PickOurs)
+		if a.detailW >= 620 {
+			if ui.Button(c, "All Current").Disabled(n == 0).Tooltip("Keep the current side of every conflict").Clicked() {
+				a.resolveConflict(f, -1, core.PickOurs)
+			}
+			if ui.Button(c, "All Incoming").Disabled(n == 0).Tooltip("Keep the incoming side of every conflict").Clicked() {
+				a.resolveConflict(f, -1, core.PickTheirs)
+			}
+			return
 		}
-		if ui.Button(c, "All Incoming").Disabled(n == 0).Tooltip("Keep the incoming side of every conflict").Clicked() {
-			a.resolveConflict(f, -1, core.PickTheirs)
-		}
+		ui.MenuButton(c, "Accept All", func(m *ui.Menu) {
+			if m.Item("Current Side Everywhere").Disabled(n == 0).Chosen() {
+				a.resolveConflict(f, -1, core.PickOurs)
+			}
+			if m.Item("Incoming Side Everywhere").Disabled(n == 0).Chosen() {
+				a.resolveConflict(f, -1, core.PickTheirs)
+			}
+		}).Shrink(0)
 	})
 	if n == 0 {
 		ui.Column(c).Grow(1).Center().Gap(10).Padding(24).Children(func() {

@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
@@ -27,9 +28,13 @@ func (a *App) branchList(c *ui.Context, pal *palette) {
 	a.branchesList.Selected = &a.branchSel
 	a.branchesList.Key = func(i int) any { return branches[i].Name }
 	a.branchesList.Label = func(i int) string { return branches[i].Name }
-	list := ui.List(c.Key("branches"), &a.branchesList, len(branches), func(i int) {
-		a.branchRow(c, pal, branches[i], i == a.branchSel)
-	}).Grow(1).FocusBind(&a.pane, paneList)
+	hot := a.hot(c, paneList)
+	var list ui.Element
+	listIn(c, hot, func() {
+		list = ui.List(c.Key("branches"), &a.branchesList, len(branches), func(i int) {
+			a.branchRow(c, pal, branches[i], hot && i == a.branchSel)
+		}).Grow(1).FocusBind(&a.pane, paneList)
+	})
 	if list.Submitted() {
 		a.pane = paneFiles // into the branch's commits, as lazygit's Enter
 	}
@@ -118,21 +123,22 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 		})
 	}
 	ui.Column(c).Padding(16, 18, 14, 18).Gap(10).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, iconBranch).FontSize(18).TextColor(tt.Accent)
-			ui.Text(c, b.Name).FontSize(17).Bold().Selectable().SingleLine().Shrink(1)
-			if b.Head {
-				ui.Text(c, "HEAD").FontSize(10).FontWeight(700).TextColor(tt.AccentText).Padding(2, 6).Radius(4).Background(tt.Accent)
-			}
-			ui.Spacer(c)
-			info := "no upstream — Push publishes it"
+		ui.Column(c).Gap(3).Children(func() {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Icon(c, iconBranch).FontSize(18).TextColor(tt.Accent).Shrink(0)
+				ui.Text(c, b.Name).FontSize(17).Bold().Selectable().SingleLine().Shrink(1).MinWidth(0).Tooltip(b.Name)
+				if b.Head {
+					ui.Text(c, "HEAD").FontSize(10).FontWeight(700).TextColor(tt.AccentText).Padding(2, 6).Radius(4).Background(tt.Accent).Shrink(0)
+				}
+			})
+			info := "Not published: Push publishes it"
 			if b.IsTrackingRemote() {
-				info = fmt.Sprintf("%s/%s · ↑%s ↓%s", b.UpstreamRemote, b.UpstreamBranch, orZero(b.AheadForPull), orZero(b.BehindForPull))
+				info = fmt.Sprintf("Tracks %s/%s · ↑%s ↓%s", b.UpstreamRemote, b.UpstreamBranch, orZero(b.AheadForPull), orZero(b.BehindForPull))
 			}
 			if r := recency(b); r != "" {
 				info += " · checked out " + r + " ago"
 			}
-			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1)
+			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine().Padding(0, 0, 0, 28)
 		})
 		ui.Row(c).Gap(8).Wrap().Children(func() {
 			if ui.PrimaryButton(c, "Checkout").Disabled(b.Head).Clicked() {
@@ -151,25 +157,28 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 	})
 	commits, graph := a.branchCommits, a.branchGraph
 	paneHeader(c, pal, "Commits on "+b.Name, func() {
-		if len(commits) > 0 {
-			ui.Text(c, "C copies to cherry-pick").FontSize(11).TextColor(pal.muted)
+		if len(commits) > 0 && a.detailW >= 560 {
+			ui.Text(c, "⇧C copies to cherry-pick").FontSize(11).TextColor(pal.muted).SingleLine().Shrink(0)
 		}
 	})
 	gw := graphWidth(graph)
 	a.branchCommitsList.Selected = &a.branchCommitSel
 	a.branchCommitsList.Key = func(i int) any { return commits[i].Hash() }
 	a.branchCommitsList.Label = func(i int) string { return commits[i].Name }
-	ui.List(c.Key("branchCommits"), &a.branchCommitsList, len(commits), func(i int) {
-		a.commitRow(c, pal, commits[i], graph[i], gw, i == a.branchCommitSel).ContextMenu(func(m *ui.Menu) {
-			a.branchCommitSel = i
-			if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
-				a.toggleCopy(b.Name, commits, i)
-			}
-			if len(a.copied) > 0 && m.Item("Paste Copied Commits onto "+a.headName()+"…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
-				a.pasteCopied()
-			}
-		})
-	}).Grow(1).FocusBind(&a.pane, paneFiles).Label("Branch commits")
+	hot := a.hot(c, paneFiles)
+	listIn(c, hot, func() {
+		ui.List(c.Key("branchCommits"), &a.branchCommitsList, len(commits), func(i int) {
+			a.commitRow(c, pal, commits[i], graph[i], gw, i == a.branchCommitSel, hot).ContextMenu(func(m *ui.Menu) {
+				a.branchCommitSel = i
+				if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
+					a.toggleCopy(b.Name, commits, i)
+				}
+				if len(a.copied) > 0 && m.Item("Paste Copied Commits onto "+a.headName()+"…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
+					a.pasteCopied()
+				}
+			})
+		}).Grow(1).FocusBind(&a.pane, paneFiles).Label("Branch commits")
+	})
 }
 
 // recency is how long ago a branch was checked out; lazygit's "*" for the
@@ -270,31 +279,38 @@ func (a *App) stashListView(c *ui.Context, pal *palette) {
 	a.stashList.Selected = &a.stashSel
 	a.stashList.Key = func(i int) any { return entries[i].Hash }
 	a.stashList.Label = func(i int) string { return entries[i].Name }
-	ui.List(c.Key("stash"), &a.stashList, len(entries), func(i int) {
-		e := entries[i]
-		sel := i == a.stashSel
-		tt := c.Theme()
-		ui.Row(c).Height(rowHeight+4).Padding(0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, e.RefName()).Font(codeFont).FontSize(11).TextColor(tint(sel, tt, pal.hash)).Shrink(0)
-			ui.Text(c, e.Name).FontSize(13).SingleLine().Shrink(1).MinWidth(0)
-			ui.Spacer(c)
-			ui.Text(c, e.Recency).FontSize(11).TextColor(tint(sel, tt, pal.muted))
-		}).ContextMenu(func(m *ui.Menu) {
-			if m.Item("Pop").Shortcut(0, ui.KeyG).Chosen() {
-				a.stashPop(e)
-			}
-			if m.Item("Apply").Shortcut(0, ui.KeySpace).Chosen() {
-				a.run("Applying…", func(r *core.Repo) error { return r.StashApply(e) })
-			}
-			m.Separator()
-			if m.Item("Drop…").Shortcut(0, ui.KeyD).Chosen() {
-				a.stashDrop(e)
+	hot := a.hot(c, paneList)
+	listIn(c, hot, func() {
+		ui.List(c.Key("stash"), &a.stashList, len(entries), func(i int) {
+			e := entries[i]
+			sel := hot && i == a.stashSel
+			tt := c.Theme()
+			ui.Row(c).Height(rowHeight+4).Padding(0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+				branch, msg := stashParts(e.Name)
+				ui.Text(c, e.RefName()).Font(codeFont).FontSize(11).TextColor(tint(sel, tt, pal.hash)).Shrink(0)
+				ui.Text(c, msg).FontSize(13).SingleLine().Shrink(1).MinWidth(0).Tooltip(e.Name)
+				ui.Spacer(c)
+				if branch != "" {
+					ui.Text(c, branch).FontSize(11).TextColor(tint(sel, tt, pal.muted)).SingleLine().Shrink(0).MaxWidth(140)
+				}
+				ui.Text(c, e.Recency).FontSize(11).TextColor(tint(sel, tt, pal.muted)).Shrink(0)
+			}).ContextMenu(func(m *ui.Menu) {
+				if m.Item("Pop").Shortcut(0, ui.KeyG).Chosen() {
+					a.stashPop(e)
+				}
+				if m.Item("Apply").Shortcut(0, ui.KeySpace).Chosen() {
+					a.run("Applying…", func(r *core.Repo) error { return r.StashApply(e) })
+				}
+				m.Separator()
+				if m.Item("Drop…").Shortcut(0, ui.KeyD).Chosen() {
+					a.stashDrop(e)
+				}
+			})
+		}).Grow(1).FocusBind(&a.pane, paneList).Children(func() {
+			if len(entries) == 0 {
+				emptyState(c, pal, iconStash, "No stashes", "Stash changes to set them aside.")
 			}
 		})
-	}).Grow(1).FocusBind(&a.pane, paneList).Children(func() {
-		if len(entries) == 0 {
-			emptyState(c, pal, iconStash, "No stashes", "Stash changes to set them aside.")
-		}
 	})
 }
 
@@ -310,9 +326,19 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 		files, err := repo.StashFiles(e)
 		return files, "", err
 	})
-	ui.Row(c).Padding(12, 16).Gap(8).AlignItems(ui.Center).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
-		ui.Text(c, e.Name).FontSize(14).Bold().SingleLine().Shrink(1)
-		ui.Spacer(c)
+	ui.Row(c).Padding(12, 16).Gap(12).AlignItems(ui.Center).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
+		branch, msg := stashParts(e.Name)
+		ui.Column(c).Gap(3).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+			ui.Text(c, msg).FontSize(14).Bold().MaxLines(2).Selectable()
+			info := e.RefName()
+			if branch != "" {
+				info += " · on " + branch
+			}
+			if e.Recency != "" {
+				info += " · " + e.Recency + " ago"
+			}
+			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine()
+		})
 		if ui.Button(c, "Apply").Clicked() {
 			a.run("Applying…", func(r *core.Repo) error { return r.StashApply(e) })
 		}
@@ -337,4 +363,27 @@ func (a *App) stashDrop(e *models.StashEntry) {
 	a.confirm("Drop "+e.RefName()+"?", e.Name, "Drop", func() {
 		a.run("Dropping…", func(r *core.Repo) error { return r.StashDrop(e) })
 	})
+}
+
+// stashParts splits a stash entry's name, as git writes it, into the
+// branch it was made on and its message: "On main: notes" or "WIP on main:
+// 1a2b3c4 subject".
+func stashParts(name string) (branch, msg string) {
+	for _, prefix := range []string{"On ", "WIP on "} {
+		rest, ok := strings.CutPrefix(name, prefix)
+		if !ok {
+			continue
+		}
+		b, m, ok := strings.Cut(rest, ": ")
+		if !ok {
+			continue
+		}
+		if prefix == "WIP on " {
+			if _, subject, ok := strings.Cut(m, " "); ok {
+				m = "WIP: " + subject
+			}
+		}
+		return b, m
+	}
+	return "", name
 }

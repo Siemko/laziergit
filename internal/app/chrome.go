@@ -225,19 +225,30 @@ func (a *App) abortOperation() {
 	})
 }
 
+// statusBar shows the keys of the pane with the focus: as many as fit
+// whole, the rest in the palette (?).
 func (a *App) statusBar(c *ui.Context, pal *palette) {
-	ui.Row(c).Height(26).Shrink(0).Padding(0, 12).Gap(14).AlignItems(ui.Center).Clip().
-		BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(pal.header).Children(func() {
+	const pad, gap = 12, 14
+	bar := ui.Row(c.Key("statusBar")).Height(26).Shrink(0).Padding(0, pad).Gap(gap).AlignItems(ui.Center).Clip().
+		BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(pal.header)
+	room := bar.Bounds().W - 2*pad
+	bar.Children(func() {
+		used := float32(0)
 		for _, h := range a.hints() {
+			kw, _ := c.MeasureText(0, ui.Span{Text: h.key, Font: codeFont, Size: 10})
+			lw, _ := c.MeasureText(0, ui.Span{Text: h.label, Size: 11})
+			w := kw + 10 + 5 + lw
+			if used > 0 {
+				w += gap
+			}
+			if room > 0 && used+w > room {
+				break
+			}
+			used += w
 			ui.Row(c).Gap(5).AlignItems(ui.Center).Shrink(0).Children(func() {
 				ui.Text(c, h.key).Font(codeFont).FontSize(10).Padding(1, 5).Radius(4).Background(pal.pill).Shrink(0)
 				ui.Text(c, h.label).FontSize(11).TextColor(pal.muted).SingleLine().Shrink(0)
 			})
-		}
-		ui.Spacer(c)
-		if n := len(a.log); n > 0 {
-			last := a.log[n-1].text
-			ui.Text(c, last).Font(codeFont).FontSize(11).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0).MaxWidth(360).Tooltip(last)
 		}
 	})
 }

@@ -378,9 +378,8 @@ func (a *App) hunkHeader(c *ui.Context, pal *palette, f *models.File, staged boo
 	header, context, _ := strings.Cut(strings.TrimPrefix(s.lines[i].Content, "@@ "), " @@")
 	ui.Row(c).Height(30).Padding(0, 10, 0, 12).Gap(10).AlignItems(ui.Center).Background(pal.pill).
 		BorderWidth(1, 0, 1, 0).BorderColor(pal.border).Children(func() {
-		ui.Text(c, "@@ "+header+" @@").Font(codeFont).FontSize(11).TextColor(pal.muted).Shrink(0)
-		// The buttons come before the hunk's context, so that they show
-		// whatever lines as long as the rows are scroll them sideways.
+		// The buttons come first, so that they show whatever lines as
+		// long as the rows are scroll them sideways.
 		hunkAct := func(label string, discard bool) {
 			b := ui.ButtonBase(c.Key(label)).Height(22).Padding(0, 9).Radius(5).Center().Label(label).Background(t(c).Background).
 				Border(1, pal.border).Shrink(0)
@@ -400,6 +399,7 @@ func (a *App) hunkHeader(c *ui.Context, pal *palette, f *models.File, staged boo
 		} else {
 			hunkAct("Unstage Hunk", false)
 		}
+		ui.Text(c, "@@ "+header+" @@").Font(codeFont).FontSize(11).TextColor(pal.muted).Shrink(0)
 		ui.Text(c, strings.TrimSpace(context)).Font(codeFont).FontSize(11).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
 	})
 }
@@ -410,11 +410,11 @@ func (a *App) selectionBar(c *ui.Context, pal *palette, f *models.File, staged b
 	n := len(s.chosen())
 	ui.Row(c).Height(40).Shrink(0).Padding(0, 12).Gap(8).AlignItems(ui.Center).
 		BorderWidth(1, 0, 0, 0).BorderColor(pal.border).Background(pal.header).Children(func() {
-		label := plural(n, "line") + " chosen"
+		label := plural(n, "line")
 		if s.sticky {
 			label += " · range"
 		}
-		ui.Text(c, label).FontSize(12).TextColor(pal.muted)
+		ui.Text(c, label).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
 		ui.Spacer(c)
 		if !staged {
 			if ui.Button(c, "Discard").Disabled(n == 0).Tooltip("Discard the lines chosen (d)").Clicked() {

@@ -113,6 +113,13 @@ type App struct {
 	copiedFrom string
 
 	conflicts conflictView
+	// accent is the window's, which lists without the keys show gray.
+	accent ui.Color
+	// detailW is the detail pane's width, the frame before: narrow, its
+	// parts stack or fold.
+	detailW float32
+	// filesH is the height of a commit's files over its diff, stacked.
+	filesH float32
 	// jobs are the actions asked for, the first running while running.
 	jobs    []job
 	running bool
@@ -155,6 +162,7 @@ func New(host Host, opts core.Options) *App {
 		sidebarW: 210,
 		listW:    380,
 		filesW:   240,
+		filesH:   150,
 	}
 	opts.OnCommand = func(cmd string, commandLine bool) {
 		a.host.Post(func() { a.addLog(cmd, commandLine) })
@@ -418,6 +426,7 @@ func (a *App) toast(title, desc string) {
 func (a *App) View(c *ui.Context) {
 	t := c.Theme()
 	pal := paletteFor(t)
+	a.accent = t.Accent
 	for _, r := range a.toasts {
 		timeout := 4 * time.Second
 		if r.kind == "error" {
@@ -480,7 +489,9 @@ func (a *App) main(c *ui.Context, pal *palette) {
 		ui.Split(c.Key("body"), &a.listW, func() {
 			ui.Column(c).Fill().Children(func() { a.listPane(c, pal) })
 		}, func() {
-			ui.Column(c).Fill().Background(t(c).Background).Children(func() { a.detailPane(c, pal) })
+			detail := ui.Column(c.Key("detailPane")).Fill().Background(t(c).Background)
+			a.detailW = detail.Bounds().W
+			detail.Children(func() { a.detailPane(c, pal) })
 		}).SplitReset(380).Grow(1).MinHeight(0)
 	}
 	if !a.logOpen {
@@ -524,10 +535,29 @@ func (a *App) detailPane(c *ui.Context, pal *palette) {
 
 // paneHeader is the bar over a list or a detail.
 func paneHeader(c *ui.Context, pal *palette, title string, extra func()) {
+	paneHeaderOf(c, pal, title, false, extra)
+}
+
+// pathHeader is a pane's bar titled with a file's path, shortened from its
+// start to fit, so that the file's name shows.
+func pathHeader(c *ui.Context, pal *palette, path string, extra func()) {
+	paneHeaderOf(c, pal, path, true, extra)
+}
+
+func paneHeaderOf(c *ui.Context, pal *palette, title string, isPath bool, extra func()) {
 	ui.Row(c).Height(34).Shrink(0).Padding(0, 10, 0, 14).Gap(8).AlignItems(ui.Center).
 		BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
-		ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
-		ui.Spacer(c)
+		// The title takes the room the rest leaves: its width, the frame
+		// before, is what a path is fitted to.
+		room := ui.Row(c.Key("title")).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center)
+		text := title
+		if isPath {
+			text = fitPath(c, title, room.Bounds().W, 12, 600)
+			room.Tooltip(title)
+		}
+		room.Children(func() {
+			ui.Text(c, text).FontSize(12).FontWeight(600).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
+		})
 		if extra != nil {
 			extra()
 		}
@@ -586,6 +616,14 @@ func (a *App) welcome(c *ui.Context, pal *palette) {
 			})
 		})
 	})
+}
+
+// ago is how long ago unix was, as a phrase: "just now", "5m ago".
+func ago(unix int64) string {
+	if r := relTime(unix); r != "now" {
+		return r + " ago"
+	}
+	return "just now"
 }
 
 func relTime(unix int64) string {

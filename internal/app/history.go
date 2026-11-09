@@ -48,10 +48,14 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 	a.commitsList.Selected = &a.commitSel
 	a.commitsList.Key = func(i int) any { return commits[i].Hash() }
 	a.commitsList.Label = func(i int) string { return commits[i].Name }
-	list := ui.List(c.Key("commits"), &a.commitsList, n, func(i int) {
-		a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, i == a.commitSel).
-			ContextMenu(func(m *ui.Menu) { a.commitMenu(m, i) })
-	}).Grow(1).FocusBind(&a.pane, paneList)
+	hot := a.hot(c, paneList)
+	var list ui.Element
+	listIn(c, hot, func() {
+		list = ui.List(c.Key("commits"), &a.commitsList, n, func(i int) {
+			a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, i == a.commitSel, hot).
+				ContextMenu(func(m *ui.Menu) { a.commitMenu(m, i) })
+		}).Grow(1).FocusBind(&a.pane, paneList)
+	})
 	if list.Submitted() {
 		a.pane = paneFiles
 	}
@@ -59,12 +63,13 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 
 // commitRow is a commit of a log: its graph, refs, subject, author, age
 // and hash, and whether it is copied to cherry-pick.
-func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []core.Pipe, gw float32, sel bool) ui.Element {
+func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []core.Pipe, gw float32, chosen, hot bool) ui.Element {
 	tt := c.Theme()
+	sel := chosen && hot
 	copied := a.isCopied(cm)
 	return ui.Row(c).Height(rowHeight).Padding(0, 10, 0, 4).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Width(gw).Height(rowHeight).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
-			drawGraphRow(p, r, row, cm, pal, tt, sel)
+			drawGraphRow(p, r, row, cm, pal, tt, chosen)
 		})
 		ui.Row(c).Gap(5).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center).Clip().Children(func() {
 			if cm.IsTODO() {
@@ -239,10 +244,11 @@ func drawGraphRow(p *ui.Painter, r ui.Rect, row []core.Pipe, cm *models.Commit, 
 	}
 	cx := x(col)
 	// The dot is ringed in the row's background, so the pipes stop short
-	// of it: the accent on the row chosen.
+	// of it: the accent (or the gray of a list without the keys) on the
+	// row chosen.
 	ring := pal.pane
 	if sel {
-		ring = tt.Accent
+		ring = tt.Accent.Over(pal.pane)
 	}
 	if cm.IsMerge() {
 		p.FillPath((&ui.Path{}).Circle(cx, mid, 5), ring)
@@ -275,12 +281,18 @@ func (a *App) commitDetail(c *ui.Context, pal *palette) {
 			subject = cm.Name
 		}
 		ui.Text(c, subject).FontSize(15).Bold().Selectable()
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600)
-			ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1)
+		// The author, and the hash and age: side by side, or the second
+		// below the first when the pane is narrow.
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Baseline).Shrink(1).MinWidth(0).Children(func() {
+				ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(0).MaxWidth(240)
+				ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
+			})
 			ui.Spacer(c)
-			ui.Text(c, cm.Hash()[:min(12, len(cm.Hash()))]).Font(codeFont).FontSize(11).TextColor(pal.hash).Selectable()
-			ui.Text(c, relTime(cm.UnixTimestamp)+" ago").FontSize(12).TextColor(pal.muted)
+			ui.Row(c).Gap(8).AlignItems(ui.Baseline).Shrink(0).Children(func() {
+				ui.Text(c, cm.Hash()[:min(12, len(cm.Hash()))]).Font(codeFont).FontSize(11).TextColor(pal.hash).Selectable()
+				ui.Text(c, ago(cm.UnixTimestamp)).FontSize(12).TextColor(pal.muted).SingleLine()
+			})
 		})
 		if body = strings.TrimSpace(body); body != "" {
 			// A long message scrolls in a few lines' room.
@@ -320,24 +332,33 @@ func (a *App) detailOf(key string, load func() ([]*models.CommitFile, string, er
 // the one chosen.
 func (a *App) filesAndDiff(c *ui.Context, pal *palette, key string, diff func(f *models.CommitFile) (string, error)) {
 	files := a.detailFiles
-	ui.Split(c, &a.filesW, func() {
+	// Narrow, the files go above the diff rather than beside it, which
+	// would leave the diff a sliver.
+	split, size, reset := ui.Split, &a.filesW, float32(240)
+	if a.detailW > 0 && a.detailW < 640 {
+		split, size, reset = ui.SplitVertical, &a.filesH, 150
+	}
+	split(c.Key(fmt.Sprint("files", reset)), size, func() {
 		ui.Column(c).Fill().Children(func() {
 			paneHeader(c, pal, plural(len(files), "file"), nil)
 			a.detailFilesList.Selected = &a.detailFileSel
 			a.detailFilesList.Key = func(i int) any { return files[i].Path }
 			a.detailFilesList.Label = func(i int) string { return files[i].Path }
-			ui.List(c.Key("detailFiles"), &a.detailFilesList, len(files), func(i int) {
-				f := files[i]
-				sel := i == a.detailFileSel
-				tt := c.Theme()
-				letter, color := commitFileLetter(pal, f.ChangeStatus)
-				dir, name := splitPath(f.Path)
-				ui.Row(c).Height(26).Padding(0, 10).Gap(7).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, letter).Font(codeFont).FontSize(11).FontWeight(700).TextColor(tint(sel, tt, color)).Width(12)
-					ui.Text(c, name).FontSize(12).SingleLine().Shrink(0)
-					ui.Text(c, dir).FontSize(11).TextColor(tint(sel, tt, pal.muted)).SingleLine().Shrink(1).MinWidth(0)
-				})
-			}).Grow(1).FocusBind(&a.pane, paneFiles)
+			hot := a.hot(c, paneFiles)
+			listIn(c, hot, func() {
+				ui.List(c.Key("detailFiles"), &a.detailFilesList, len(files), func(i int) {
+					f := files[i]
+					sel := hot && i == a.detailFileSel
+					tt := c.Theme()
+					letter, color := commitFileLetter(pal, f.ChangeStatus)
+					dir, name := splitPath(f.Path)
+					ui.Row(c).Height(26).Padding(0, 10).Gap(7).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, letter).Font(codeFont).FontSize(11).FontWeight(700).TextColor(tint(sel, tt, color)).Width(12)
+						ui.Text(c, name).FontSize(12).SingleLine().Shrink(0)
+						ui.Text(c, dir).FontSize(11).TextColor(tint(sel, tt, pal.muted)).SingleLine().Shrink(1).MinWidth(0)
+					})
+				}).Grow(1).FocusBind(&a.pane, paneFiles)
+			})
 		})
 	}, func() {
 		ui.Column(c).Fill().Children(func() {
@@ -346,10 +367,10 @@ func (a *App) filesAndDiff(c *ui.Context, pal *palette, key string, diff func(f 
 				return
 			}
 			f := files[a.detailFileSel]
-			paneHeader(c, pal, f.Path, func() { a.layoutToggle(c) })
+			pathHeader(c, pal, f.Path, func() { a.layoutToggle(c) })
 			a.diffView(c, pal, key+":"+f.Path, func() (string, error) { return diff(f) })
 		})
-	}).SplitReset(240).Grow(1).MinHeight(0)
+	}).SplitReset(reset).Grow(1).MinHeight(0)
 }
 
 func commitFileLetter(pal *palette, status string) (string, ui.Color) {

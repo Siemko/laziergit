@@ -55,12 +55,16 @@ func (a *App) changesList(c *ui.Context, pal *palette) {
 	a.filesList.Selected = &a.fileSel
 	a.filesList.Key = func(i int) any { return files[i].Path }
 	a.filesList.Label = func(i int) string { return files[i].Path }
-	list := ui.List(c.Key("files"), &a.filesList, len(files), func(i int) {
-		a.fileRow(c, pal, files[i], i == a.fileSel)
-	}).Grow(1).FocusBind(&a.pane, paneList).Children(func() {
-		if len(files) == 0 {
-			emptyState(c, pal, iconCheck, "Working tree clean", "Nothing to commit.")
-		}
+	hot := a.hot(c, paneList)
+	var list ui.Element
+	listIn(c, hot, func() {
+		list = ui.List(c.Key("files"), &a.filesList, len(files), func(i int) {
+			a.fileRow(c, pal, files[i], hot && i == a.fileSel)
+		}).Grow(1).FocusBind(&a.pane, paneList).Children(func() {
+			if len(files) == 0 {
+				emptyState(c, pal, iconCheck, "Working tree clean", "Nothing to commit.")
+			}
+		})
 	})
 	if list.Submitted() {
 		a.pane = paneDiff
@@ -87,7 +91,8 @@ func (a *App) fileRow(c *ui.Context, pal *palette, f *models.File, sel bool) {
 		if conflicted {
 			box.Disabled(true).Tooltip("Resolve its conflicts to stage it")
 		}
-		fill, mark := tt.Accent, tt.AccentText
+		// The window's accent, though the list shows its choice in gray.
+		fill, mark := a.accent, ui.RGB(255, 255, 255)
 		if sel {
 			fill, mark = tt.AccentText, tt.Accent
 		}
@@ -124,12 +129,16 @@ func (a *App) toggleAll() {
 
 func (a *App) confirmDiscard(f *models.File) {
 	if f.IsNestedRepository() {
-		a.confirm("Delete the repository "+f.Path+"?", "It is a repository of its own: it is deleted with all of its history, which can't be undone.", "Delete Repository", func() {
+		a.confirm("Delete the repository "+path.Base(f.Path)+"?", "It is a repository of its own: it is deleted with all of its history, which can't be undone.", "Delete Repository", func() {
 			a.run("Deleting…", func(r *core.Repo) error { return r.DeleteNestedRepository(f) })
 		})
 		return
 	}
-	a.confirm("Discard changes to "+f.Path+"?", "Its changes are lost; this can't be undone.", "Discard", func() {
+	msg := "Its changes are lost; this can't be undone."
+	if dir, _ := path.Split(f.Path); dir != "" {
+		msg = "In " + strings.TrimSuffix(dir, "/") + ". " + msg
+	}
+	a.confirm("Discard changes to "+path.Base(f.Path)+"?", msg, "Discard", func() {
 		a.run("Discarding…", func(r *core.Repo) error { return r.Discard(f) })
 	})
 }
@@ -187,7 +196,7 @@ func (a *App) fileDetail(c *ui.Context, pal *palette) {
 	}
 	both := f.HasStagedChanges && f.HasUnstagedChanges
 	staged := a.showingStaged(f)
-	paneHeader(c, pal, f.Path, func() {
+	pathHeader(c, pal, f.Path, func() {
 		if both {
 			ui.Segmented(c, &a.diffStaged, "Unstaged", "Staged").Label("Which changes").Tooltip("Switch (tab)")
 		}
@@ -207,7 +216,7 @@ func (a *App) showingStaged(f *models.File) bool {
 // conflictWithoutMarkers is a conflict git wrote no markers for, as a file
 // one side deleted and the other changed.
 func (a *App) conflictWithoutMarkers(c *ui.Context, pal *palette, f *models.File) {
-	paneHeader(c, pal, f.Path, nil)
+	pathHeader(c, pal, f.Path, nil)
 	ui.Column(c).Grow(1).Center().Gap(10).Padding(24).Children(func() {
 		ui.Icon(c, iconWarning).FontSize(28).TextColor(pal.conflict)
 		ui.Text(c, "Conflict: "+conflictKind(f.ShortStatus)).FontSize(13).FontWeight(600)
