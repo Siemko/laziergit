@@ -7,7 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
 
-	"laziergit/internal/core"
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 const (

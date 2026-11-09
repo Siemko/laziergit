@@ -9,12 +9,35 @@ git behaviour (loaders, staging, interactive rebase through lazygit's
 daemon, push and pull with credential prompts) is lazygit's own. Only the UI
 is new.
 
-## Run
+## Install
+
+With Homebrew, on macOS 13 or later:
+
+```sh
+brew install Siemko/tap/laziergit
+laziergit            # in a repository, or:
+ln -sf "$(brew --prefix)/opt/laziergit/laziergit.app" /Applications/laziergit.app
+```
+
+With Go 1.27.3+ (a `laziergit` command, without the app bundle):
+
+```sh
+go install github.com/Siemko/laziergit@latest
+```
+
+The app isn't signed with a Developer ID yet, so macOS blocks the disk
+images of the [releases](https://github.com/Siemko/laziergit/releases) when
+they are downloaded with a browser. Homebrew and `go install` don't mark
+what they install as downloaded, so neither is blocked. To use a disk image
+anyway, clear the mark after copying the app:
+`xattr -dr com.apple.quarantine /Applications/laziergit.app`.
+
+## Run from source
 
 Requires Go 1.27.3+.
 
 ```sh
-go run . [path/to/repo]       # or: go tool mygo dev
+go run . [path/to/repo…]      # or: go tool mygo dev
 go test ./...                 # the UI tests run headless, without a window
 go tool mygo build            # build/darwin-arm64/laziergit.app and a .dmg
 ```
@@ -43,6 +66,8 @@ window, then quit.
 ## Layout
 
 ```
+tools/genicon       draws resources/icon.png
+scripts/            the third-party notices, and the Homebrew formula of a release
 main.go             startup: lazygit's rebase daemon, the login shell's PATH, a single instance
 windows.go          the windows, their menus, recent repositories and the session
 internal/core       a thin adapter over lazygit's GitCommand: Open, Load (a Snapshot), actions
@@ -76,3 +101,14 @@ Limitations:
 Started from Finder or the Dock, the app takes its `PATH` from your login
 shell, so that git finds Homebrew's tools (gpg, git-lfs, credential helpers)
 and hooks find theirs. `LAZIERGIT_DEBUG=1` logs what the windows do.
+
+## Releasing
+
+Bump `version` in `mygo.json`, run `scripts/notices.sh`, commit, and push the
+tag `v<version>`: the release workflow tests, builds and publishes the app.
+Then `scripts/formula.sh <version>` prints the tap's formula.
+
+## License
+
+MIT. The modules laziergit includes are under their own licenses, collected
+in `resources/THIRD_PARTY_NOTICES.md`.

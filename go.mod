@@ -1,4 +1,4 @@
-module laziergit
+module github.com/Siemko/laziergit
 
 go 1.27.3
 

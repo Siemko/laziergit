@@ -10,7 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"laziergit/internal/core"
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 func TestMain(m *testing.M) {

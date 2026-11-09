@@ -9,7 +9,7 @@ import (
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
 	"github.com/jesseduffield/lazygit/pkg/commands/patch"
 
-	"laziergit/internal/core"
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 // stagingView is a file's diff in the work tree, line by line, whose lines

@@ -11,7 +11,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
 
-	"laziergit/internal/core"
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 // section is what the sidebar shows in the main area.

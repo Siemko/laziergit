@@ -4,22 +4,28 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 
-	"laziergit/internal/core"
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 func main() {
 	// git runs this binary again as the sequence editor of lazygit's
 	// interactive rebases.
 	if core.HandleDaemon() {
+		return
+	}
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println("laziergit", version())
 		return
 	}
 	// Started from Finder or the Dock, the app has launchd's PATH, which
@@ -103,6 +109,18 @@ func repoArgs(args []string, wd string) []string {
 		}
 	}
 	return out
+}
+
+// version is the app's: the bundle's, from mygo.json, or the module's for
+// go install.
+func version() string {
+	if v := mygo.App.Version(); v != "" {
+		return v
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return strings.TrimPrefix(bi.Main.Version, "v")
+	}
+	return "dev"
 }
 
 func configDir() string {

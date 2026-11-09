@@ -14,8 +14,8 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"laziergit/internal/app"
-	"laziergit/internal/core"
+	"github.com/Siemko/laziergit/internal/app"
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 // manager keeps the app's windows, each on a repository or, before one is

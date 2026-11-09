@@ -1,2 +1,4 @@
 build/
+dist/
 *.png
+!resources/icon.png

@@ -8,7 +8,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
 
-	"laziergit/internal/core"
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 // contextShown is how many unchanged lines show around a conflict before

@@ -1,0 +1,64 @@
+# Builds the macOS app when a version tag is pushed, and publishes it on a
+# release: the app in a tarball per architecture, which the Homebrew
+# formula installs, and the disk images.
+#
+# The app is signed ad hoc, not with a Developer ID: Gatekeeper blocks the
+# disk images downloaded from a browser (see the README), while Homebrew's
+# formula, which doesn't quarantine what it downloads, installs it as is.
+# With a Developer ID, add the signing and notarization of MyGo's
+# docs/github-actions.md before "Build".
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write # to create the release and upload to it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # a release builds from nothing cached
+      - name: Check the tag is mygo.json's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
+          if [ "v$version" != "$TAG" ]; then
+            echo "tag $TAG doesn't match mygo.json's version $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Test
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.com
+          go test ./...
+      - name: Build
+        run: go tool mygo build -platform darwin/arm64,darwin/amd64 -skip-notarize
+      - name: Package
+        run: |
+          mkdir dist
+          for arch in arm64 amd64; do
+            tar -czf "dist/laziergit-$VERSION-darwin-$arch.tar.gz" -C "build/darwin-$arch" laziergit.app
+            cp "build/darwin-$arch/laziergit-$VERSION-$arch.dmg" dist/
+          done
+          (cd dist && shasum -a 256 * > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "laziergit $VERSION" --generate-notes

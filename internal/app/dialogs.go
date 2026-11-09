@@ -3,8 +3,8 @@ package app
 import (
 	"github.com/egoist/mygo/ui"
 
+	"github.com/Siemko/laziergit/internal/core"
 	"github.com/jesseduffield/lazygit/pkg/commands/oscommands"
-	"laziergit/internal/core"
 )
 
 type dialogKind int
