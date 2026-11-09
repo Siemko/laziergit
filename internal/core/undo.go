@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -325,16 +326,21 @@ func (r *Repo) diskCollisions(tree, local []string) ([]string, error) {
 		isOther[p] = true
 	}
 	// hasLocalUnder reports whether untracked or ignored files are in the
-	// directory dir: listed in it, as it, or as a directory above it,
-	// which git lists alone when all it holds is untracked.
+	// directory dir: listed as it (git lists a directory of them alone,
+	// but for an empty one), listed in it, or, in a directory above it
+	// that git lists alone, there on disk.
 	hasLocalUnder := func(dir string) bool {
-		i, _ := slices.BinarySearch(others, dir)
-		if i < len(others) && (others[i] == dir || strings.HasPrefix(others[i], dir+"/")) {
+		if isOther[dir] {
+			return true
+		}
+		// "dir/" rather than "dir": "dir.txt" and "dir-old" sort between
+		// dir and what is in it.
+		if i, _ := slices.BinarySearch(others, dir+"/"); i < len(others) && strings.HasPrefix(others[i], dir+"/") {
 			return true
 		}
 		for up := filepath.Dir(dir); up != "." && up != "/"; up = filepath.Dir(up) {
 			if isOther[up] {
-				return true
+				return holdsFiles(filepath.Join(r.Path, dir))
 			}
 		}
 		return false
@@ -379,6 +385,24 @@ func (r *Repo) diskCollisions(tree, local []string) ([]string, error) {
 		}
 	}
 	return hit, nil
+}
+
+// holdsFiles reports whether a directory holds anything but directories,
+// at any depth: empty directories hold nothing to lose.
+func holdsFiles(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			found = true // what can't be read is kept
+			return filepath.SkipAll
+		}
+		if !d.IsDir() {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // diskNames finds the names the disk has for paths it found by other
@@ -454,7 +478,12 @@ func (r *Repo) inTheWay(p string, dirLen int) bool {
 		if err != nil {
 			continue
 		}
-		if q == p || !st.IsDir() {
+		switch {
+		case q == p && st.IsDir():
+			// A directory at the file's path: in the way with files in
+			// it; empty ones the reset replaces.
+			return holdsFiles(filepath.Join(r.Path, q))
+		case q == p || !st.IsDir():
 			return true
 		}
 	}

@@ -914,3 +914,52 @@ func TestUndoWithDecomposedIndex(t *testing.T) {
 		t.Fatalf("four.txt %q", got)
 	}
 }
+
+// Round 8 of the review.
+
+func TestUndoRefusesDirectoryBesideSiblingByName(t *testing.T) {
+	r, dir := newRepo(t)
+	if !ignoresCase(t, dir) {
+		t.Skip("the disk tells case apart")
+	}
+	os.MkdirAll(filepath.Join(dir, "dir"), 0o755)
+	write(t, dir, "dir/a", "tracked\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "dir")
+	git(t, dir, "rm", "-q", "-r", "dir")
+	write(t, dir, "Dir", "a file\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "Dir file")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "dir/precious", "precious\n")
+	write(t, dir, "dir.txt", "a sibling sorting between dir and dir/\n")
+	s, _ := r.FindUndo(false)
+	if err := r.ApplyUndo(s, false); err == nil {
+		t.Fatal("replaced a directory holding untracked work")
+	}
+	if got := readFile(t, dir, "dir/precious"); got != "precious\n" {
+		t.Fatalf("lost %q", got)
+	}
+}
+
+func TestUndoReplacesEmptyDirectoryInUntrackedOne(t *testing.T) {
+	r, dir := newRepo(t)
+	os.MkdirAll(filepath.Join(dir, "build"), 0o755)
+	write(t, dir, "build/foo", "a file\n")
+	git(t, dir, "add", "-f", "build/foo")
+	git(t, dir, "commit", "-q", "-m", "build/foo")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(dir, "build", "foo", "empty"), 0o755) // empty directories only
+	write(t, dir, "build/cache", "cache\n")
+	undo(t, r, false)
+	if got := readFile(t, dir, "build/foo"); got != "a file\n" {
+		t.Fatalf("build/foo %q", got)
+	}
+	if got := readFile(t, dir, "build/cache"); got != "cache\n" {
+		t.Fatalf("build/cache %q", got)
+	}
+}
