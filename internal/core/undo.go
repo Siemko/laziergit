@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -229,8 +230,9 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 // or by the form of an accent, the disk itself tells (diskCollisions).
 func (r *Repo) checkUntrackedAgainst(target string) error {
 	// --directory lists a directory of untracked files as itself, with a
-	// slash; without --exclude-standard, ignored files are listed too.
-	out, err := r.git_("ls-files", "--others", "--directory", "-z")
+	// slash, but for an empty one, which holds nothing to lose; without
+	// --exclude-standard, ignored files are listed too.
+	out, err := r.git_("ls-files", "--others", "--directory", "--no-empty-directory", "-z")
 	if err != nil {
 		return fmt.Errorf("listing untracked files: %w", err)
 	}
@@ -283,7 +285,7 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 	// default ignores case ("docs" for "Docs", "ς.txt" for "σ.txt") and
 	// the form of accents. Asked by the target's spelling, it says what is
 	// there.
-	more, err := r.diskCollisions(strings.Split(tree, "\x00"))
+	more, err := r.diskCollisions(strings.Split(tree, "\x00"), local)
 	if err != nil {
 		return err
 	}
@@ -297,44 +299,73 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 
 // diskCollisions finds, of the target's files, those the reset would write
 // where the disk has something git doesn't track, under any spelling the
-// disk takes for theirs: the file itself, a directory at its path, or a
-// file where it needs a directory.
-func (r *Repo) diskCollisions(tree []string) ([]string, error) {
+// disk takes for theirs: a file (not in the index), a directory holding
+// untracked or ignored files at its path, or a file where it needs a
+// directory. local is git's list of untracked and ignored paths, a
+// directory of them as one. Names compare in the composed form of accents,
+// whichever the index keeps.
+func (r *Repo) diskCollisions(tree, local []string) ([]string, error) {
 	index, err := r.git_("ls-files", "-z")
 	if err != nil {
 		return nil, err
 	}
 	inIndex := map[string]bool{}
-	var indexed []string
 	for _, p := range strings.Split(index, "\x00") {
 		if p != "" {
-			inIndex[p] = true
-			indexed = append(indexed, p)
+			inIndex[norm.NFC.String(p)] = true
 		}
 	}
-	slices.Sort(indexed)
-	tracksUnder := func(dir string) bool {
-		i, _ := slices.BinarySearch(indexed, dir+"/")
-		return i < len(indexed) && strings.HasPrefix(indexed[i], dir+"/")
+	var others []string
+	for _, p := range local {
+		others = append(others, norm.NFC.String(p))
 	}
+	slices.Sort(others)
+	isOther := map[string]bool{}
+	for _, p := range others {
+		isOther[p] = true
+	}
+	// hasLocalUnder reports whether untracked or ignored files are in the
+	// directory dir: listed in it, as it, or as a directory above it,
+	// which git lists alone when all it holds is untracked.
+	hasLocalUnder := func(dir string) bool {
+		i, _ := slices.BinarySearch(others, dir)
+		if i < len(others) && (others[i] == dir || strings.HasPrefix(others[i], dir+"/")) {
+			return true
+		}
+		for up := filepath.Dir(dir); up != "." && up != "/"; up = filepath.Dir(up) {
+			if isOther[up] {
+				return true
+			}
+		}
+		return false
+	}
+	names := newDiskNames(r.Path)
 	var hit []string
 	for _, p := range tree {
-		if p == "" || inIndex[p] {
-			continue // tracked under this spelling: the reset rewrites it
+		if p == "" {
+			continue
+		}
+		if inIndex[norm.NFC.String(p)] {
+			// Tracked under this spelling: a file at it, by any spelling,
+			// is that file to git, whose changes the stash keeps. Only a
+			// directory there holds what the reset would delete.
+			if st, err := os.Lstat(filepath.Join(r.Path, p)); err == nil && st.IsDir() && hasLocalUnder(names.actual(p)) {
+				hit = append(hit, p)
+			}
+			continue
 		}
 		for q := p; q != "." && q != "/"; q = filepath.Dir(q) {
 			st, err := os.Lstat(filepath.Join(r.Path, q))
 			if err != nil {
 				continue
 			}
-			// Its name as the disk has it, in the composed form of accents
-			// that git's index keeps on macOS.
-			actual := norm.NFC.String(r.actualPath(q))
+			actual := names.actual(q)
 			switch {
 			case q == p && st.IsDir():
-				// A directory where the target has a file: one of tracked
-				// files the reset replaces; one of others it would delete.
-				if !tracksUnder(actual) {
+				// A directory where the target has a file: lost with what
+				// it holds that git doesn't track; empty, or of tracked
+				// files alone, the reset replaces it.
+				if hasLocalUnder(actual) {
 					hit = append(hit, p)
 				}
 			case !st.IsDir():
@@ -350,36 +381,67 @@ func (r *Repo) diskCollisions(tree []string) ([]string, error) {
 	return hit, nil
 }
 
-// actualPath is the path the disk has for rel, which it found by another
-// spelling, as "Docs/A.md" for "docs/a.md": each name as its directory
-// lists it.
-func (r *Repo) actualPath(rel string) string {
-	parts := strings.Split(rel, "/")
-	cur := ""
-	for _, part := range parts {
-		want, err := os.Lstat(filepath.Join(r.Path, cur, part))
-		if err != nil {
-			return rel
-		}
-		name := part
-		if entries, err := os.ReadDir(filepath.Join(r.Path, cur)); err == nil {
-			for _, e := range entries {
-				if e.Name() == part {
-					name = part
-					break
+// diskNames finds the names the disk has for paths it found by other
+// spellings, as "Docs/A.md" for "docs/a.md", listing each directory once.
+type diskNames struct {
+	root string
+	dirs map[string]map[fileID]string
+}
+
+type fileID struct{ dev, ino uint64 }
+
+func idOf(st os.FileInfo) (fileID, bool) {
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fileID{}, false
+	}
+	return fileID{uint64(sys.Dev), uint64(sys.Ino)}, true
+}
+
+func newDiskNames(root string) *diskNames {
+	return &diskNames{root: root, dirs: map[string]map[fileID]string{}}
+}
+
+// entries maps what the directory dir (as the disk names it) holds to
+// their names.
+func (d *diskNames) entries(dir string) map[fileID]string {
+	if m, ok := d.dirs[dir]; ok {
+		return m
+	}
+	m := map[fileID]string{}
+	if list, err := os.ReadDir(filepath.Join(d.root, dir)); err == nil {
+		for _, e := range list {
+			if st, err := os.Lstat(filepath.Join(d.root, dir, e.Name())); err == nil {
+				if id, ok := idOf(st); ok {
+					m[id] = e.Name()
 				}
-				if st, err := os.Lstat(filepath.Join(r.Path, cur, e.Name())); err == nil && os.SameFile(st, want) {
-					name = e.Name()
+			}
+		}
+	}
+	d.dirs[dir] = m
+	return m
+}
+
+// actual is rel by the names the disk lists, in the composed form of
+// accents.
+func (d *diskNames) actual(rel string) string {
+	cur := ""
+	for _, part := range strings.Split(rel, "/") {
+		name := part
+		if st, err := os.Lstat(filepath.Join(d.root, cur, part)); err == nil {
+			if id, ok := idOf(st); ok {
+				if n, ok := d.entries(cur)[id]; ok {
+					name = n
 				}
 			}
 		}
 		if cur == "" {
 			cur = name
 		} else {
-			cur = cur + "/" + name
+			cur += "/" + name
 		}
 	}
-	return cur
+	return norm.NFC.String(cur)
 }
 
 // inTheWay reports whether writing the file p meets something on disk

@@ -833,3 +833,84 @@ func TestUndoDoesntRefuseWhatTheDiskTellsApart(t *testing.T) {
 		t.Fatalf("i %q", got)
 	}
 }
+
+// Round 7 of the review.
+
+func TestUndoRefusesFileOverDirectoryWithTrackedAndUntracked(t *testing.T) {
+	r, dir := newRepo(t)
+	os.MkdirAll(filepath.Join(dir, "docs"), 0o755)
+	write(t, dir, "docs/tracked.txt", "tracked\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "docs dir")
+	// The target turns the directory into a file named by another case.
+	git(t, dir, "rm", "-q", "-r", "docs")
+	write(t, dir, "Docs", "a file\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "Docs file")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "docs/precious.txt", "precious\n")
+	s, _ := r.FindUndo(false)
+	_ = r.ApplyUndo(s, false) // refused where the disk ignores case
+	if got := readFile(t, dir, "docs/precious.txt"); got != "precious\n" {
+		t.Fatalf("lost %q", got)
+	}
+}
+
+func TestUndoRefusesDirectoryWhereTrackedFileWas(t *testing.T) {
+	r, dir := newRepo(t)
+	os.MkdirAll(filepath.Join(dir, "Docs"), 0o755)
+	write(t, dir, "Docs/A.md", "a\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "Docs/A.md")
+	write(t, dir, "four.txt", "four\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "four")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	// The tracked file, deleted, and a directory by its name, by another
+	// case, holding work of the user's.
+	os.Remove(filepath.Join(dir, "Docs", "A.md"))
+	os.MkdirAll(filepath.Join(dir, "docs", "a.md"), 0o755)
+	write(t, dir, "docs/a.md/mine.txt", "mine\n")
+	s, _ := r.FindUndo(false)
+	_ = r.ApplyUndo(s, false)
+	if got := readFile(t, dir, "docs/a.md/mine.txt"); got != "mine\n" {
+		t.Fatalf("lost %q", got)
+	}
+}
+
+func TestUndoReplacesEmptyDirectory(t *testing.T) {
+	r, dir := newRepo(t)
+	write(t, dir, "logs", "a file\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "logs file")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(dir, "logs"), 0o755) // empty: nothing to lose
+	undo(t, r, false)
+	if got := readFile(t, dir, "logs"); got != "a file\n" {
+		t.Fatalf("logs %q", got)
+	}
+}
+
+func TestUndoWithDecomposedIndex(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "config", "core.precomposeUnicode", "false")
+	write(t, dir, "Cafe\u0301.txt", "cafe\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "decomposed name")
+	write(t, dir, "four.txt", "four\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "four")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	undo(t, r, false) // the tracked café is no file in the way
+	if got := readFile(t, dir, "four.txt"); got != "four\n" {
+		t.Fatalf("four.txt %q", got)
+	}
+}
