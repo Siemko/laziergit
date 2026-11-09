@@ -755,3 +755,81 @@ func TestContinueRefusedIsNoConflict(t *testing.T) {
 		t.Fatalf("continue: %v", err)
 	}
 }
+
+// Round 6 of the review.
+
+func TestUndoRefusesFileByUnicodeCase(t *testing.T) {
+	r, dir := newRepo(t)
+	write(t, dir, "σ.txt", "sigma\n")
+	if _, err := os.Stat(filepath.Join(dir, "ς.txt")); err != nil {
+		t.Skip("the disk tells σ and ς apart")
+	}
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "sigma")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "ς.txt", "mine\n")
+	s, _ := r.FindUndo(false)
+	if err := r.ApplyUndo(s, false); err == nil {
+		t.Fatal("overwrote ς.txt, which the disk takes for σ.txt")
+	}
+	if got := readFile(t, dir, "ς.txt"); got != "mine\n" {
+		t.Fatalf("lost %q", got)
+	}
+}
+
+// sameOnDisk reports whether the disk takes two names for one.
+func sameOnDisk(t *testing.T, dir, a, b string) bool {
+	os.WriteFile(filepath.Join(dir, a), nil, 0o644)
+	defer os.Remove(filepath.Join(dir, a))
+	_, err := os.Stat(filepath.Join(dir, b))
+	return err == nil
+}
+
+func TestUndoAsksTheDiskForOtherSpellings(t *testing.T) {
+	cases := []struct{ committed, local string }{
+		{"straße", "STRASSE"},               // full case folding
+		{"Caf\u00e9.txt", "Cafe\u0301.txt"}, // composed and decomposed accents
+	}
+	for _, c := range cases {
+		t.Run(c.local, func(t *testing.T) {
+			r, dir := newRepo(t)
+			if !sameOnDisk(t, dir, c.committed, c.local) {
+				t.Skip("the disk tells them apart")
+			}
+			write(t, dir, c.committed, "committed\n")
+			git(t, dir, "add", ".")
+			git(t, dir, "commit", "-q", "-m", "spelling")
+			if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+				t.Fatal(err)
+			}
+			write(t, dir, c.local, "mine\n")
+			s, _ := r.FindUndo(false)
+			if err := r.ApplyUndo(s, false); err == nil {
+				t.Fatalf("overwrote %q, which the disk takes for %q", c.local, c.committed)
+			}
+			if got := readFile(t, dir, c.local); got != "mine\n" {
+				t.Fatalf("lost %q", got)
+			}
+		})
+	}
+}
+
+func TestUndoDoesntRefuseWhatTheDiskTellsApart(t *testing.T) {
+	r, dir := newRepo(t)
+	if sameOnDisk(t, dir, "\u0130", "i") {
+		t.Skip("the disk takes İ for i")
+	}
+	write(t, dir, "\u0130", "dotted\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "dotted I")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "i", "unrelated\n")
+	undo(t, r, false) // İ and i are two files: nothing in the way
+	if got := readFile(t, dir, "i"); got != "unrelated\n" {
+		t.Fatalf("i %q", got)
+	}
+}

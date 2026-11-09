@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/jesseduffield/lazygit/pkg/commands"
 	"github.com/jesseduffield/lazygit/pkg/commands/git_commands"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
@@ -223,13 +225,9 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 // overwrite or delete: a local file at a file's path or at a directory of
 // one, local files in a directory the target has a file at, and, in a
 // local directory of such files, a path the target writes that is there
-// already. On a disk that ignores case, as macOS's by default, paths that
-// differ in case alone are the same.
+// already. Which spellings the disk takes for the same name, as by case
+// or by the form of an accent, the disk itself tells (diskCollisions).
 func (r *Repo) checkUntrackedAgainst(target string) error {
-	fold := func(p string) string { return p }
-	if r.ignoresCase() {
-		fold = strings.ToLower
-	}
 	// --directory lists a directory of untracked files as itself, with a
 	// slash; without --exclude-standard, ignored files are listed too.
 	out, err := r.git_("ls-files", "--others", "--directory", "-z")
@@ -242,17 +240,13 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		switch {
 		case p == "":
 		case strings.HasSuffix(p, "/"):
-			p = fold(strings.TrimSuffix(p, "/"))
+			p = strings.TrimSuffix(p, "/")
 			isDir[p] = true
 			local = append(local, p)
 		default:
-			p = fold(p)
 			isFile[p] = true
 			local = append(local, p)
 		}
-	}
-	if len(local) == 0 {
-		return nil
 	}
 	slices.Sort(local)
 	tree, err := r.git_("ls-tree", "-r", "-z", "--name-only", target)
@@ -264,7 +258,7 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		if name == "" {
 			continue
 		}
-		p := fold(name)
+		p := name
 		for dir := p; dir != "." && dir != "/"; dir = filepath.Dir(dir) {
 			if isFile[dir] {
 				hit = append(hit, name) // a local file where the target has a file or a directory
@@ -285,6 +279,15 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 			hit = append(hit, local[i])
 		}
 	}
+	// A disk may take other spellings for the same name: macOS's by
+	// default ignores case ("docs" for "Docs", "ς.txt" for "σ.txt") and
+	// the form of accents. Asked by the target's spelling, it says what is
+	// there.
+	more, err := r.diskCollisions(strings.Split(tree, "\x00"))
+	if err != nil {
+		return err
+	}
+	hit = append(hit, more...)
 	if len(hit) > 0 {
 		hit = slices.Compact(hit)
 		return fmt.Errorf("files git doesn't track would be overwritten: %s; move them away first", strings.Join(hit[:min(len(hit), 5)], ", "))
@@ -292,12 +295,91 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 	return nil
 }
 
-// ignoresCase reports whether the work tree's disk takes names differing
-// in case for the same, as macOS's does by default.
-func (r *Repo) ignoresCase() bool {
-	a, errA := os.Stat(filepath.Join(r.Path, ".git"))
-	b, errB := os.Stat(filepath.Join(r.Path, ".GIT"))
-	return errA == nil && errB == nil && os.SameFile(a, b)
+// diskCollisions finds, of the target's files, those the reset would write
+// where the disk has something git doesn't track, under any spelling the
+// disk takes for theirs: the file itself, a directory at its path, or a
+// file where it needs a directory.
+func (r *Repo) diskCollisions(tree []string) ([]string, error) {
+	index, err := r.git_("ls-files", "-z")
+	if err != nil {
+		return nil, err
+	}
+	inIndex := map[string]bool{}
+	var indexed []string
+	for _, p := range strings.Split(index, "\x00") {
+		if p != "" {
+			inIndex[p] = true
+			indexed = append(indexed, p)
+		}
+	}
+	slices.Sort(indexed)
+	tracksUnder := func(dir string) bool {
+		i, _ := slices.BinarySearch(indexed, dir+"/")
+		return i < len(indexed) && strings.HasPrefix(indexed[i], dir+"/")
+	}
+	var hit []string
+	for _, p := range tree {
+		if p == "" || inIndex[p] {
+			continue // tracked under this spelling: the reset rewrites it
+		}
+		for q := p; q != "." && q != "/"; q = filepath.Dir(q) {
+			st, err := os.Lstat(filepath.Join(r.Path, q))
+			if err != nil {
+				continue
+			}
+			// Its name as the disk has it, in the composed form of accents
+			// that git's index keeps on macOS.
+			actual := norm.NFC.String(r.actualPath(q))
+			switch {
+			case q == p && st.IsDir():
+				// A directory where the target has a file: one of tracked
+				// files the reset replaces; one of others it would delete.
+				if !tracksUnder(actual) {
+					hit = append(hit, p)
+				}
+			case !st.IsDir():
+				// A file at the path, or where the target needs a
+				// directory: lost, unless it is a tracked one.
+				if !inIndex[actual] {
+					hit = append(hit, p)
+				}
+			}
+			break // an existing directory above: the rest is there too
+		}
+	}
+	return hit, nil
+}
+
+// actualPath is the path the disk has for rel, which it found by another
+// spelling, as "Docs/A.md" for "docs/a.md": each name as its directory
+// lists it.
+func (r *Repo) actualPath(rel string) string {
+	parts := strings.Split(rel, "/")
+	cur := ""
+	for _, part := range parts {
+		want, err := os.Lstat(filepath.Join(r.Path, cur, part))
+		if err != nil {
+			return rel
+		}
+		name := part
+		if entries, err := os.ReadDir(filepath.Join(r.Path, cur)); err == nil {
+			for _, e := range entries {
+				if e.Name() == part {
+					name = part
+					break
+				}
+				if st, err := os.Lstat(filepath.Join(r.Path, cur, e.Name())); err == nil && os.SameFile(st, want) {
+					name = e.Name()
+				}
+			}
+		}
+		if cur == "" {
+			cur = name
+		} else {
+			cur = cur + "/" + name
+		}
+	}
+	return cur
 }
 
 // inTheWay reports whether writing the file p meets something on disk

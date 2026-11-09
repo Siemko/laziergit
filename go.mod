@@ -8,6 +8,7 @@ require (
 	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/afero v1.15.0
 	github.com/stefanhaller/git-todo-parser v0.0.7-0.20250905083220-c50528f08304
+	golang.org/x/text v0.43.0
 )
 
 require (
@@ -47,7 +48,6 @@ require (
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
