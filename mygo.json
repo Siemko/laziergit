@@ -1,0 +1,6 @@
+{
+  "name": "laziergit",
+  "identifier": "dev.laziergit.app",
+  "version": "0.1.0",
+  "out": "build"
+}
