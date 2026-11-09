@@ -81,8 +81,8 @@ func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []co
 			}
 			refs := refsOf(cm)
 			limit := 2
-			if narrow {
-				limit = 1
+			if room > 0 && room < 470 {
+				limit = 1 // a subject, not a row of refs
 			}
 			shown := refs[:min(len(refs), limit)]
 			for _, ref := range shown {
@@ -314,14 +314,14 @@ func (a *App) commitDetail(c *ui.Context, pal *palette) {
 		if subject == "" {
 			subject = cm.Name
 		}
-		ui.Text(c, subject).FontSize(15).FontWeight(600).Selectable().Margin(0, 0, 4, 0)
+		ui.Text(c, subject).FontSize(15).FontWeight(600).Pretty().Selectable().Margin(0, 0, 4, 0)
 		// The author, and the hash and age: side by side, or the second
 		// below the first when the pane is narrow.
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Avatar(c, cm.AuthorName, nil).FontSize(14).Shrink(0)
 			ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Baseline).MinWidth(0).Children(func() {
-					ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(1).MinWidth(0).MaxWidth(240).
+					ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(0).MaxWidth(280).
 						Tooltip(cm.AuthorName + " <" + cm.AuthorEmail + ">")
 					if a.detailW <= 0 || a.detailW >= 560 {
 						ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)

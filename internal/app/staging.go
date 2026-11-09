@@ -327,8 +327,8 @@ func (a *App) patchRow(c *ui.Context, pal *palette, f *models.File, staged bool,
 		numBg, numColor = mark, ui.RGB(255, 255, 255)
 		if !focused {
 			// Calmer while the diff hasn't the keys: a deeper tint, its
-			// numbers in the color.
-			numBg, numColor = base.MixOklab(mark, 0.32), mark
+			// numbers in the text's color (white in the dark).
+			numBg, numColor = base.MixOklab(mark, 0.32), tt.Text
 			if tt.Dark {
 				numBg, numColor = base.MixOklab(mark, 0.45), ui.RGB(255, 255, 255).Alpha(0.9)
 			}

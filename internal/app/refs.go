@@ -358,7 +358,7 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 			text.AlignSelf(ui.Stretch)
 		}
 		text.Children(func() {
-			ui.Text(c, msg).FontSize(14).FontWeight(600).MaxLines(3).Selectable()
+			ui.Text(c, msg).FontSize(14).FontWeight(600).MaxLines(3).Pretty().Selectable()
 			info := e.RefName()
 			if branch != "" {
 				info += " · on " + branch
