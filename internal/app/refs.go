@@ -1,10 +1,13 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
+
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 func (a *App) selectedBranch() *models.Branch {
@@ -189,7 +192,7 @@ func (a *App) checkout(b *models.Branch) {
 	if b.Head {
 		return
 	}
-	a.run("Checking out "+b.Name+"…", func() error { return a.repo.Checkout(b.Name) }, func() { a.toast("Checked out "+b.Name, "") })
+	a.run("Checking out "+b.Name+"…", func(r *core.Repo) error { return r.Checkout(b.Name) }, func() { a.toast("Checked out "+b.Name, "") })
 }
 
 func (a *App) newBranch() {
@@ -202,25 +205,42 @@ func (a *App) newBranch() {
 
 func (a *App) newBranchFrom(base string) {
 	a.prompt("New branch from "+base, "", "Create", false, func(name string) {
-		a.run("Creating "+name+"…", func() error { return a.repo.NewBranch(name, base) }, func() { a.branchSel = 0 })
+		a.run("Creating "+name+"…", func(r *core.Repo) error { return r.NewBranch(name, base) }, func() { a.branchSel = 0 })
 	})
 }
 
 func (a *App) merge(b *models.Branch) {
 	a.confirm("Merge "+b.Name+" into "+a.headName()+"?", "", "Merge", func() {
-		a.run("Merging…", func() error { return a.repo.Merge(b.Name) })
+		a.run("Merging…", func(r *core.Repo) error { return r.Merge(b.Name) })
 	})
 }
 
 func (a *App) rebaseOnto(b *models.Branch) {
 	a.confirm("Rebase "+a.headName()+" onto "+b.Name+"?", "", "Rebase", func() {
-		a.run("Rebasing…", func() error { return a.repo.RebaseOnto(b.Name) })
+		a.run("Rebasing…", func(r *core.Repo) error { return r.RebaseOnto(b.Name) })
 	})
 }
 
+// deleteBranch deletes a branch merged, and asks again before deleting
+// one whose commits no other branch has.
 func (a *App) deleteBranch(b *models.Branch) {
-	a.confirm("Delete branch "+b.Name+"?", "Unmerged commits on it are force-deleted.", "Delete", func() {
-		a.run("Deleting…", func() error { return a.repo.DeleteBranch(b.Name, true) })
+	a.confirm("Delete branch "+b.Name+"?", "", "Delete", func() {
+		unmerged := false
+		a.run("Deleting…", func(r *core.Repo) error {
+			err := r.DeleteBranch(b.Name, false)
+			if errors.Is(err, core.ErrNotMerged) {
+				unmerged = true
+				return nil
+			}
+			return err
+		}, func() {
+			if !unmerged {
+				return
+			}
+			a.confirm(b.Name+" isn't fully merged", "Its commits that no other branch has are lost when it is deleted.", "Delete Anyway", func() {
+				a.run("Deleting…", func(r *core.Repo) error { return r.DeleteBranch(b.Name, true) })
+			})
+		})
 	})
 }
 
@@ -264,7 +284,7 @@ func (a *App) stashListView(c *ui.Context, pal *palette) {
 				a.stashPop(e)
 			}
 			if m.Item("Apply").Shortcut(0, ui.KeySpace).Chosen() {
-				a.run("Applying…", func() error { return a.repo.StashApply(e) })
+				a.run("Applying…", func(r *core.Repo) error { return r.StashApply(e) })
 			}
 			m.Separator()
 			if m.Item("Drop…").Shortcut(0, ui.KeyD).Chosen() {
@@ -294,7 +314,7 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 		ui.Text(c, e.Name).FontSize(14).Bold().SingleLine().Shrink(1)
 		ui.Spacer(c)
 		if ui.Button(c, "Apply").Clicked() {
-			a.run("Applying…", func() error { return a.repo.StashApply(e) })
+			a.run("Applying…", func(r *core.Repo) error { return r.StashApply(e) })
 		}
 		if ui.PrimaryButton(c, "Pop").Clicked() {
 			a.stashPop(e)
@@ -305,16 +325,16 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 
 func (a *App) stashAll() {
 	a.prompt("Stash all changes", "", "Stash", false, func(msg string) {
-		a.run("Stashing…", func() error { return a.repo.StashAll(msg) }, func() { a.section = secStash; a.stashSel = 0 })
+		a.run("Stashing…", func(r *core.Repo) error { return r.StashAll(msg) }, func() { a.section = secStash; a.stashSel = 0 })
 	})
 }
 
 func (a *App) stashPop(e *models.StashEntry) {
-	a.run("Popping…", func() error { return a.repo.StashPop(e) })
+	a.run("Popping…", func(r *core.Repo) error { return r.StashPop(e) })
 }
 
 func (a *App) stashDrop(e *models.StashEntry) {
 	a.confirm("Drop "+e.RefName()+"?", e.Name, "Drop", func() {
-		a.run("Dropping…", func() error { return a.repo.StashDrop(e) })
+		a.run("Dropping…", func(r *core.Repo) error { return r.StashDrop(e) })
 	})
 }

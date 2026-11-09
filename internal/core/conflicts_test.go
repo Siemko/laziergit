@@ -95,7 +95,7 @@ func TestResolveMergeConflict(t *testing.T) {
 	if !f.HasInlineMergeConflicts {
 		t.Fatalf("file %+v", f)
 	}
-	content, err := r.ReadFile(f.Path)
+	content, err := r.ReadConflicted(f.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,11 +103,8 @@ func TestResolveMergeConflict(t *testing.T) {
 	if len(cf.Conflicts) != 1 || cf.Conflicts[0].TheirsLabel != "feature" {
 		t.Fatalf("conflicts %+v", cf.Conflicts)
 	}
-	if err := r.WriteFile(f.Path, cf.Resolve(0, PickBoth)); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.MarkResolved(f); err != nil {
-		t.Fatal(err)
+	if staged, err := r.ResolveConflict(f, content, cf.Resolve(0, PickBoth)); err != nil || !staged {
+		t.Fatalf("resolve: staged %v, %v", staged, err)
 	}
 	if err := r.ContinueOperation(load(t, r).State); err != nil {
 		t.Fatal(err)

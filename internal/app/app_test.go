@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -85,8 +86,13 @@ func testerFor(t *testing.T, dir string) (*App, *ui.Tester, string) {
 	t.Cleanup(func() { os.Chdir(cwd) })
 	a := New(Host{Post: func(fn func()) { fn() }, Go: func(fn func()) { fn() }},
 		core.Options{ConfigDir: filepath.Join(t.TempDir(), "config")})
-	if err := a.Open(dir); err != nil {
-		t.Fatal(err)
+	a.Open(dir, func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if a.Repo() == nil {
+		t.Fatal("not opened")
 	}
 	tt := ui.NewTester(a.View, 1280, 800)
 	tt.Frame()
@@ -480,5 +486,95 @@ func TestWelcomeRecent(t *testing.T) {
 	}
 	if err := tt.Click("Open Repository…"); err != nil || !asked {
 		t.Fatalf("open repository: %v, asked %v", err, asked)
+	}
+}
+
+// asyncHost runs work on goroutines, as the app does, and keeps what it
+// posts for the UI thread until pump runs it.
+type asyncHost struct{ posts chan func() }
+
+func newAsync(t *testing.T, dir string) (*App, *asyncHost) {
+	h := &asyncHost{posts: make(chan func(), 64)}
+	cwd, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(cwd) })
+	a := New(Host{Post: func(fn func()) { h.posts <- fn }, Go: func(fn func()) { go fn() }},
+		core.Options{ConfigDir: filepath.Join(t.TempDir(), "config")})
+	a.Open(dir, nil)
+	h.pump(t, func() bool { return a.snap != nil })
+	return a, h
+}
+
+// pump runs what the app posted until done holds.
+func (h *asyncHost) pump(t *testing.T, done func() bool) {
+	t.Helper()
+	deadline := time.After(20 * time.Second)
+	for !done() {
+		select {
+		case fn := <-h.posts:
+			fn()
+		case <-deadline:
+			t.Fatal("timed out")
+		}
+	}
+}
+
+func TestActionsRunInOrder(t *testing.T) {
+	a, h := newAsync(t, fixture(t))
+	dir := a.Repo().Path
+	// Stage everything, then commit at once: the commit must see the stage.
+	files := a.snap.Files
+	a.run("Staging…", func(r *core.Repo) error { return r.ToggleAllStaged(files) })
+	a.run("Committing…", func(r *core.Repo) error { return r.Commit("everything", "", false) })
+	h.pump(t, func() bool { return a.busy == 0 && !a.loading })
+	if st := git(t, dir, "status", "--porcelain"); st != "" {
+		t.Fatalf("left after the commit:\n%s", st)
+	}
+	if got := git(t, dir, "log", "-1", "--format=%s"); got != "everything" {
+		t.Fatalf("HEAD %q", got)
+	}
+}
+
+func TestCloseWithWorkQueued(t *testing.T) {
+	a, h := newAsync(t, fixture(t))
+	dir := a.Repo().Path
+	files := a.snap.Files
+	a.run("Staging…", func(r *core.Repo) error { return r.ToggleAllStaged(files) })
+	a.run("Committing…", func(r *core.Repo) error { return r.Commit("never", "", false) })
+	a.Close() // must neither block nor panic
+	h.pump(t, func() bool { return a.busy == 0 })
+	if got := git(t, dir, "log", "-1", "--format=%s"); got == "never" {
+		t.Fatal("committed after the window closed")
+	}
+	a.run("Fetching…", (*core.Repo).Fetch) // refused once closed
+	if a.busy != 0 {
+		t.Fatal("ran work after closing")
+	}
+}
+
+func TestCredentialAnswers(t *testing.T) {
+	a := New(Host{Post: func(fn func()) { fn() }, Go: func(fn func()) { fn() }}, core.Options{})
+	tt := ui.NewTester(a.View, 900, 600)
+	_ = tt
+	answer := a.opts.AskCredential(0) // a password
+	a.dialog.value = "secret"
+	a.dialog.onOK(a.dialog.value)
+	if got := <-answer; got != "secret\n" {
+		t.Fatalf("answer %q", got)
+	}
+	cancelled := a.opts.AskCredential(0)
+	a.dialog.onCancel()
+	if got := <-cancelled; got != "\n" {
+		t.Fatalf("cancel %q", got)
+	}
+	// A prompt left open is answered as the window closes, so that git
+	// doesn't wait on it with the repository taken.
+	pending := a.opts.AskCredential(0)
+	a.confirm("Something else?", "", "OK", func() {})
+	if a.dialog.kind != dialogCredential {
+		t.Fatal("a confirmation replaced the credential prompt")
+	}
+	a.Close()
+	if got := <-pending; got != "\n" {
+		t.Fatalf("on close %q", got)
 	}
 }

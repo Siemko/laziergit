@@ -44,7 +44,7 @@ func TestStageUnstageDiscardLines(t *testing.T) {
 	write(t, dir, "greek.txt", strings.NewReplacer("beta\n", "BETA\n", "iota\n", "iota\nlambda\n").Replace(original))
 
 	f := fileNamed(t, load(t, r), "greek.txt")
-	diff := r.FileDiff(f, false)
+	diff, _ := r.FileDiff(f, false)
 	// Stage the change of beta alone: its deletion and its addition.
 	if err := r.ApplyLines(f, diff, linesMatching(diff, "beta", "BETA"), StageLines); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestStageUnstageDiscardLines(t *testing.T) {
 
 	// Take the addition of BETA back out, leaving beta's deletion staged.
 	f = fileNamed(t, load(t, r), "greek.txt")
-	diff = r.FileDiff(f, true)
+	diff, _ = r.FileDiff(f, true)
 	if err := r.ApplyLines(f, diff, linesMatching(diff, "BETA"), UnstageLines); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestStageUnstageDiscardLines(t *testing.T) {
 
 	// Throw lambda away from the work tree.
 	f = fileNamed(t, load(t, r), "greek.txt")
-	diff = r.FileDiff(f, false)
+	diff, _ = r.FileDiff(f, false)
 	if err := r.ApplyLines(f, diff, linesMatching(diff, "lambda"), DiscardLines); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestStageLinesOfUntrackedFile(t *testing.T) {
 	r, dir := newRepo(t)
 	write(t, dir, "new.txt", "keep\nleave\n")
 	f := fileNamed(t, load(t, r), "new.txt")
-	diff := r.FileDiff(f, false)
+	diff, _ := r.FileDiff(f, false)
 	if err := r.ApplyLines(f, diff, linesMatching(diff, "keep"), StageLines); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestStageLinesOfUntrackedFile(t *testing.T) {
 	}
 	// Every line staged is the file staged, added.
 	f = fileNamed(t, load(t, r), "new.txt")
-	diff = r.FileDiff(f, false)
+	diff, _ = r.FileDiff(f, false)
 	if err := r.ApplyLines(f, diff, linesMatching(diff, "leave"), StageLines); err != nil {
 		t.Fatal(err)
 	}

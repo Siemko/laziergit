@@ -29,7 +29,7 @@ class Laziergit < Formula
     sha256 "$intel"
   end
 
-  depends_on :macos
+  depends_on macos: :monterey
 
   def install
     prefix.install "laziergit.app"

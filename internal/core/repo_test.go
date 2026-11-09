@@ -94,7 +94,7 @@ func TestLoadStageCommit(t *testing.T) {
 	}
 	for _, f := range s.Files {
 		if f.Path == "one.txt" {
-			if d := r.FileDiff(f, false); !strings.Contains(d, "+more") {
+			if d, _ := r.FileDiff(f, false); !strings.Contains(d, "+more") {
 				t.Fatalf("diff of one.txt: %q", d)
 			}
 		}

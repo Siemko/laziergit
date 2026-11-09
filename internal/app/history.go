@@ -66,7 +66,7 @@ func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []co
 		ui.Box(c).Width(gw).Height(rowHeight).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
 			drawGraphRow(p, r, row, cm, pal, tt, sel)
 		})
-		ui.Row(c).Gap(5).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(5).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Center).Clip().Children(func() {
 			if cm.IsTODO() {
 				ui.Text(c, strings.ToLower(cm.Action.String())).Font(codeFont).FontSize(10).FontWeight(700).
 					TextColor(tint(sel, tt, pal.modified)).Padding(1, 6).Radius(4).Background(pal.modified.Alpha(0.14)).Shrink(0)
@@ -93,7 +93,7 @@ func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []co
 				ui.Textf(c, "+%d", n).FontSize(10).FontWeight(600).TextColor(tint(sel, tt, pal.muted)).Shrink(0).
 					Tooltip(refsTooltip(refs[len(shown):]))
 			}
-			ui.Text(c, cm.Name).FontSize(13).SingleLine().Grow(1).Shrink(1).MinWidth(110)
+			ui.Text(c, cm.Name).FontSize(13).SingleLine().Grow(1).Shrink(1).MinWidth(60)
 		})
 		if copied {
 			ui.Text(c, "copied").FontSize(10).FontWeight(700).Padding(1, 6).Radius(4).Shrink(0).
@@ -375,13 +375,16 @@ func splitPath(p string) (dir, name string) {
 func (a *App) drop(i int) {
 	commits := a.snap.Commits
 	a.confirm("Drop “"+commits[i].Name+"”?", "The commit is removed from the branch's history by an interactive rebase.", "Drop", func() {
-		a.run("Dropping…", func() error { return a.repo.DropCommit(commits, i) })
+		a.run("Dropping…", func(r *core.Repo) error { return r.DropCommit(commits, i) })
 	})
 }
 
 func (a *App) fixup(i int) {
 	commits := a.snap.Commits
-	a.run("Fixing up…", func() error { return a.repo.FixupCommit(commits, i) })
+	if i < 0 || i >= len(commits) {
+		return
+	}
+	a.run("Fixing up…", func(r *core.Repo) error { return r.FixupCommit(commits, i) })
 }
 
 func (a *App) moveCommit(i, delta int) {
@@ -389,7 +392,7 @@ func (a *App) moveCommit(i, delta int) {
 	if j := i + delta; j < 0 || j >= len(commits) {
 		return
 	}
-	a.run("Moving…", func() error { return a.repo.MoveCommit(commits, i, delta) }, func() { a.commitSel = i + delta })
+	a.run("Moving…", func(r *core.Repo) error { return r.MoveCommit(commits, i, delta) }, func() { a.commitSel = i + delta })
 }
 
 func (a *App) reword(i int) {
@@ -405,8 +408,8 @@ func (a *App) reword(i int) {
 			}
 			a.prompt("Reword commit", strings.TrimSpace(msg), "Reword", true, func(text string) {
 				summary, desc, _ := strings.Cut(strings.TrimSpace(text), "\n")
-				a.run("Rewording…", func() error {
-					return a.repo.RewordCommit(commits, i, strings.TrimSpace(summary), strings.TrimSpace(desc))
+				a.run("Rewording…", func(r *core.Repo) error {
+					return r.RewordCommit(commits, i, strings.TrimSpace(summary), strings.TrimSpace(desc))
 				})
 			})
 		})

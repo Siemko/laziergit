@@ -64,7 +64,7 @@ func (a *App) pasteCopied() {
 	}
 	a.confirm("Cherry-pick "+plural(len(commits), "commit")+" onto "+a.headName()+"?",
 		"They are applied oldest first, as new commits.", "Cherry-Pick", func() {
-			a.run("Cherry-picking…", func() error { return a.repo.CherryPick(commits) }, func() {
+			a.run("Cherry-picking…", func(r *core.Repo) error { return r.CherryPick(commits) }, func() {
 				a.copied, a.copiedFrom = nil, ""
 				a.toast("Cherry-picked "+plural(len(commits), "commit"), "")
 			})
@@ -100,8 +100,10 @@ func (a *App) undo(redo bool) {
 	if a.repo == nil {
 		return
 	}
+	if a.repo == nil || a.snap == nil {
+		return
+	}
 	repo := a.repo
-	files := a.snap.Files
 	a.host.Go(func() {
 		step, err := repo.FindUndo(redo)
 		a.host.Post(func() {
@@ -114,8 +116,7 @@ func (a *App) undo(redo bool) {
 				title, doing, done = "Redo?", "Redoing…", "Redone"
 			}
 			a.confirm(title, step.Describe(redo), title[:len(title)-1], func() {
-				dirty := core.HasTrackedChanges(files)
-				a.run(doing, func() error { return repo.ApplyUndo(step, redo, dirty) }, func() { a.toast(done, step.Describe(redo)) })
+				a.run(doing, func(r *core.Repo) error { return r.ApplyUndo(step, redo) }, func() { a.toast(done, step.Describe(redo)) })
 			})
 		})
 	})

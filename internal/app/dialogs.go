@@ -29,12 +29,22 @@ type dialog struct {
 	open      bool
 }
 
+// asking reports whether a credential prompt shows, which git waits on:
+// another dialog must not take its place.
+func (a *App) asking() bool { return a.dialog != nil && a.dialog.kind == dialogCredential }
+
 func (a *App) confirm(title, message, button string, ok func()) {
+	if a.asking() {
+		return
+	}
 	a.dialog = &dialog{kind: dialogConfirm, title: title, message: message, button: button, open: true,
 		onOK: func(string) { ok() }}
 }
 
 func (a *App) prompt(title, value, button string, multiline bool, ok func(string)) {
+	if a.asking() {
+		return
+	}
 	a.dialog = &dialog{kind: dialogPrompt, title: title, value: value, button: button, multiline: multiline, open: true, onOK: ok}
 }
 
@@ -46,13 +56,21 @@ func (a *App) askCredential(kind core.Credential, ch chan string) {
 		oscommands.PIN:        "PIN",
 		oscommands.Token:      "Token",
 	}
+	// git reads a line: the answer and Enter, as lazygit's own prompt
+	// sends it. Cancelling sends an empty line, which fails the command
+	// rather than leave it waiting with the repository taken.
 	answered := false
 	answer := func(v string) {
 		if !answered {
 			answered = true
-			ch <- v
+			ch <- v + "\n"
 		}
 	}
+	if a.closed {
+		answer("")
+		return
+	}
+	a.credentials = append(a.credentials, answer)
 	a.dialog = &dialog{
 		kind: dialogCredential, title: titles[kind], message: "git is asking for your " + titles[kind] + ".",
 		button: "Continue", secret: kind != oscommands.Username, open: true,

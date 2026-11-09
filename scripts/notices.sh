@@ -15,7 +15,7 @@ out=resources/THIRD_PARTY_NOTICES.md
 	go version -m "$bin" | awk '$1 == "dep" { print $2, $3 }' | sort | while read -r mod ver; do
 		# The module cache escapes capitals as !lowercase.
 		dir="$modcache/$(echo "$mod" | sed -E 's/([A-Z])/!\1/g' | tr 'A-Z' 'a-z')@$ver"
-		lic=$(ls "$dir" 2>/dev/null | grep -iE '^(licen[cs]e|copying)(\.(md|txt))?$' | head -1 || true)
+		lic=$(ls "$dir" 2>/dev/null | grep -iE '^(licen[cs]e|copying)([.-][a-z0-9-]+)?$' | head -1 || true)
 		echo
 		echo "## $mod $ver"
 		echo

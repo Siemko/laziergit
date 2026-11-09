@@ -12,7 +12,7 @@ func undo(t *testing.T, r *Repo, redo bool) UndoStep {
 	if err != nil {
 		t.Fatalf("find (redo %v): %v", redo, err)
 	}
-	if err := r.ApplyUndo(s, redo, HasTrackedChanges(load(t, r).Files)); err != nil {
+	if err := r.ApplyUndo(s, redo); err != nil {
 		t.Fatalf("apply %+v (redo %v): %v", s, redo, err)
 	}
 	return s
@@ -131,11 +131,8 @@ func TestCherryPickConflict(t *testing.T) {
 		t.Fatalf("state %+v", s.State)
 	}
 	f := fileNamed(t, s, "two.txt")
-	content, _ := r.ReadFile(f.Path)
-	if err := r.WriteFile(f.Path, ParseConflicts(content, 0).Resolve(0, PickTheirs)); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.MarkResolved(f); err != nil {
+	content, _ := r.ReadConflicted(f.Path)
+	if _, err := r.ResolveConflict(f, content, ParseConflicts(content, 0).Resolve(0, PickTheirs)); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.ContinueOperation(load(t, r).State); err != nil {

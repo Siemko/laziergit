@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,6 +35,10 @@ type conflictView struct {
 
 	spans [][]ui.Span
 	dark  bool
+
+	// notText is set for a conflicted path that isn't a regular file, as a
+	// symlink, which has no markers to resolve here.
+	notText bool
 }
 
 // conflictItem is a row of the view: some unchanged lines, a fold of
@@ -50,12 +55,17 @@ type conflictSide struct {
 	pick     core.Pick
 }
 
-func (v *conflictView) set(path, content string, markers int) {
+// set shows content: the app's own resolution, or the file as loaded,
+// which, changed by another app, forgets the resolutions to undo.
+func (v *conflictView) set(path, content string, markers int, ours bool) {
+	v.notText = false
 	if path == v.path && content == v.content {
 		return
 	}
 	if path != v.path {
 		v.sel, v.undo, v.expanded, v.list = 0, nil, map[int]bool{}, ui.ListState{}
+	} else if !ours {
+		v.undo = nil
 	}
 	v.path, v.content, v.markers = path, content, markers
 	v.file = core.ParseConflicts(content, markers)
@@ -178,18 +188,26 @@ func (a *App) conflictPane(c *ui.Context, pal *palette, f *models.File) {
 		v.key = key
 		repo := a.repo
 		a.host.Go(func() {
-			content, err := repo.ReadFile(f.Path)
+			content, err := repo.ReadConflicted(f.Path)
 			a.host.Post(func() {
 				if v.key != key {
+					return
+				}
+				if errors.Is(err, core.ErrNotRegular) {
+					v.path, v.file, v.notText = f.Path, nil, true
 					return
 				}
 				if err != nil {
 					a.toastErr(err)
 					return
 				}
-				v.set(f.Path, content, f.ConflictMarkerSize)
+				v.set(f.Path, content, f.ConflictMarkerSize, false)
 			})
 		})
+	}
+	if v.path == f.Path && v.notText {
+		a.conflictWithoutMarkers(c, pal, f)
+		return
 	}
 	if v.path != f.Path || v.file == nil {
 		return
@@ -349,42 +367,54 @@ func smallButton(c *ui.Context, pal *palette, label string, primary bool) ui.Ele
 // writing the file; with no conflict left, the file is staged.
 func (a *App) resolveConflict(f *models.File, i int, pick core.Pick) {
 	v := &a.conflicts
-	if v.file == nil {
-		return
+	if v.file == nil || a.busy > 0 {
+		return // one resolution at a time, each from the file as written
 	}
 	content := v.file.ResolveAll(pick)
 	if i >= 0 {
 		content = v.file.Resolve(i, pick)
 	}
-	v.undo = append(v.undo, v.content)
-	a.writeConflicted(f, content)
+	a.writeConflicted(f, v.content, content, true)
 }
 
 func (a *App) undoConflict(f *models.File) {
 	v := &a.conflicts
-	if len(v.undo) == 0 {
+	if len(v.undo) == 0 || a.busy > 0 {
 		return
 	}
-	content := v.undo[len(v.undo)-1]
-	v.undo = v.undo[:len(v.undo)-1]
-	a.writeConflicted(f, content)
+	a.writeConflicted(f, v.content, v.undo[len(v.undo)-1], false)
 }
 
-func (a *App) writeConflicted(f *models.File, content string) {
+// writeConflicted writes a resolution of f in place of expected, the
+// content shown, and shows it once written: with no conflict left, the
+// file is staged. A file changed since it was shown is loaded again,
+// rather than overwritten.
+func (a *App) writeConflicted(f *models.File, expected, content string, undoable bool) {
 	v := &a.conflicts
 	path := f.Path
-	v.set(path, content, v.markers)
-	resolved := len(v.file.Conflicts) == 0
-	a.run("Resolving…", func() error {
-		if err := a.repo.WriteFile(path, content); err != nil {
-			return err
+	staged := false
+	stale := false
+	a.run("Resolving…", func(r *core.Repo) error {
+		var err error
+		staged, err = r.ResolveConflict(f, expected, content)
+		if errors.Is(err, core.ErrStale) {
+			stale = true
+			return nil
 		}
-		if resolved {
-			return a.repo.MarkResolved(f)
-		}
-		return nil
+		return err
 	}, func() {
-		if resolved {
+		if stale {
+			v.key = "" // load it again
+			a.toasts = append(a.toasts, toastReq{title: path + " changed on disk", desc: "It was loaded again: choose again.", kind: "warning"})
+			return
+		}
+		if undoable {
+			v.undo = append(v.undo, expected)
+		} else if len(v.undo) > 0 {
+			v.undo = v.undo[:len(v.undo)-1]
+		}
+		v.set(path, content, v.markers, true)
+		if staged {
 			v.undo = nil
 			a.toast("Resolved "+path, "")
 			a.offerContinue = true
@@ -393,7 +423,7 @@ func (a *App) writeConflicted(f *models.File, content string) {
 }
 
 func (a *App) markResolved(f *models.File) {
-	a.run("Staging…", func() error { return a.repo.MarkResolved(f) }, func() { a.offerContinue = true })
+	a.run("Staging…", func(r *core.Repo) error { return r.MarkResolved(f) }, func() { a.offerContinue = true })
 }
 
 // offerToContinue asks to continue the operation in progress once no file
@@ -414,7 +444,7 @@ func (a *App) offerToContinue() {
 	}
 	noun := a.operationNoun(st)
 	a.confirm("All conflicts are resolved", "Continue the "+noun+"?", "Continue "+titleCase(noun), func() {
-		a.run("Continuing…", func() error { return a.repo.ContinueOperation(st) })
+		a.run("Continuing…", func(r *core.Repo) error { return r.ContinueOperation(st) })
 	})
 }
 

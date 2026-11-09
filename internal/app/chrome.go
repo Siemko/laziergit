@@ -7,6 +7,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
+
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 func (a *App) sidebar(c *ui.Context, pal *palette) {
@@ -115,30 +117,34 @@ func (a *App) toolbar(c *ui.Context, pal *palette) {
 			}
 		}
 		ui.Spacer(c)
-		if iconButton(c, iconUndo, "Undo (z)", false).Clicked() {
+		loaded := a.snap != nil
+		if iconButton(c, iconUndo, "Undo (z)", false).Disabled(!loaded).Clicked() {
 			a.undo(false)
 		}
-		if iconButton(c, iconRedo, "Redo (Z)", false).Clicked() {
+		if iconButton(c, iconRedo, "Redo (Z)", false).Disabled(!loaded).Clicked() {
 			a.undo(true)
 		}
 		ui.Box(c).Width(1).Height(18).Background(pal.border).Margin(0, 4)
-		if toolButton(c, pal, iconFetch, "Fetch", "Fetch (f)").Clicked() {
+		if toolButton(c, pal, iconFetch, "Fetch", "Fetch (f)").Disabled(!loaded).Clicked() {
 			a.fetch()
 		}
-		if toolButton(c, pal, iconPull, "Pull", "Pull (p)").Clicked() {
+		if toolButton(c, pal, iconPull, "Pull", "Pull (p)").Disabled(!loaded).Clicked() {
 			a.pull()
 		}
-		if toolButton(c, pal, iconPush, "Push", "Push (P)").Clicked() {
+		if toolButton(c, pal, iconPush, "Push", "Push (P)").Disabled(!loaded).Clicked() {
 			a.push(false)
 		}
 	})
 }
 
-func (a *App) fetch() { a.run("Fetching…", a.repo.Fetch, func() { a.toast("Fetched", "") }) }
-func (a *App) pull()  { a.run("Pulling…", a.repo.Pull, func() { a.toast("Pulled", "") }) }
+func (a *App) fetch() { a.run("Fetching…", (*core.Repo).Fetch, func() { a.toast("Fetched", "") }) }
+func (a *App) pull()  { a.run("Pulling…", (*core.Repo).Pull, func() { a.toast("Pulled", "") }) }
 func (a *App) push(force bool) {
+	if a.snap == nil {
+		return
+	}
 	head, remotes := a.snap.Head, a.snap.Remotes
-	a.run("Pushing…", func() error { return a.repo.Push(head, remotes, force) }, func() { a.toast("Pushed", "") })
+	a.run("Pushing…", func(r *core.Repo) error { return r.Push(head, remotes, force) }, func() { a.toast("Pushed", "") })
 }
 
 // stateBanner says what operation is in progress, with its actions.
@@ -187,13 +193,19 @@ func canSkip(st models.WorkingTreeState) bool {
 }
 
 func (a *App) continueOperation() {
+	if a.snap == nil {
+		return
+	}
 	st := a.snap.State
-	a.run("Continuing…", func() error { return a.repo.ContinueOperation(st) })
+	a.run("Continuing…", func(r *core.Repo) error { return r.ContinueOperation(st) })
 }
 
 func (a *App) skipOperation() {
+	if a.snap == nil {
+		return
+	}
 	st := a.snap.State
-	a.run("Skipping…", func() error { return a.repo.SkipOperation(st) })
+	a.run("Skipping…", func(r *core.Repo) error { return r.SkipOperation(st) })
 }
 
 // operationNoun is what the operation in progress is called: "merge",
@@ -203,10 +215,13 @@ func (a *App) operationNoun(st models.WorkingTreeState) string {
 }
 
 func (a *App) abortOperation() {
+	if a.snap == nil {
+		return
+	}
 	st := a.snap.State
 	noun := a.operationNoun(st)
 	a.confirm("Abort the "+noun+"?", "The repository goes back to how it was before the "+noun+" started.", "Abort "+titleCase(noun), func() {
-		a.run("Aborting…", func() error { return a.repo.AbortOperation(st) })
+		a.run("Aborting…", func(r *core.Repo) error { return r.AbortOperation(st) })
 	})
 }
 

@@ -261,11 +261,16 @@ func (a *App) stagingPane(c *ui.Context, pal *palette, f *models.File, staged bo
 		s.key = key
 		repo := a.repo
 		a.host.Go(func() {
-			text := repo.FileDiff(f, staged)
+			text, err := repo.FileDiff(f, staged)
 			a.host.Post(func() {
-				if s.key == key {
-					s.set(f.Path, text)
+				if s.key != key {
+					return
 				}
+				if err != nil {
+					a.toastErr(err)
+					return
+				}
+				s.set(f.Path, text)
 			})
 		})
 	}
@@ -443,7 +448,7 @@ func (a *App) applyChosen(f *models.File, staged, discard bool) {
 	}
 	apply := func() {
 		s.anchor, s.sticky = -1, false
-		a.run(doing, func() error { return a.repo.ApplyLines(f, text, chosen, action) })
+		a.run(doing, func(r *core.Repo) error { return r.ApplyLines(f, text, chosen, action) })
 	}
 	if discard {
 		a.confirm("Discard "+plural(len(chosen), "line")+"?", "They are lost from "+f.Path+"; this can't be undone.", "Discard Lines", apply)

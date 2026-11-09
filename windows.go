@@ -55,7 +55,15 @@ func (w *repoWindow) path() string {
 // to the front; otherwise from, a window without a repository, or a new
 // window shows it.
 func (m *manager) open(dir string, from *repoWindow) {
-	root := repoRoot(dir)
+	// git finds the work tree off the UI thread, which a command of
+	// another window can't then hold up.
+	go func() {
+		root := repoRoot(dir)
+		mygo.RunOnMain(func() { m.openRoot(root, from) })
+	}()
+}
+
+func (m *manager) openRoot(root string, from *repoWindow) {
 	for _, w := range m.windows {
 		if w.path() == root {
 			debugf("window %d already has %s", w.win.ID(), root)
@@ -78,8 +86,7 @@ func (m *manager) open(dir string, from *repoWindow) {
 	}
 	w := from
 	w.opening = root
-	w.win.Update(func() {
-		err := w.app.Open(root)
+	w.app.Open(root, func(err error) {
 		w.opening = ""
 		if err != nil {
 			log.Printf("opening %s: %v", root, err)
@@ -275,8 +282,7 @@ func (m *manager) saveSession() {
 		}
 	}
 	data, _ := json.Marshal(paths)
-	_ = os.MkdirAll(m.configDir, 0o755)
-	if err := os.WriteFile(m.sessionFile(), data, 0o644); err != nil {
+	if err := writePrivate(m.sessionFile(), data); err != nil {
 		log.Println(err)
 	}
 }
@@ -288,7 +294,30 @@ func (m *manager) quitting() {
 	m.closing = true
 }
 
+// writePrivate replaces a file the user alone reads, atomically.
+func writePrivate(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".session-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path) // CreateTemp makes it 0600
+}
+
 func (m *manager) lastSession() []string {
+	if m.configDir == "" {
+		return nil
+	}
 	data, err := os.ReadFile(m.sessionFile())
 	if err != nil {
 		return nil
@@ -308,7 +337,9 @@ func repoRoot(dir string) string {
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	cmd.Env = withoutGitLocation(os.Environ())
+	out, err := cmd.Output()
 	if err != nil {
 		return dir
 	}
@@ -320,4 +351,18 @@ func debugf(format string, args ...any) {
 	if os.Getenv("LAZIERGIT_DEBUG") != "" {
 		log.Printf(format, args...)
 	}
+}
+
+// withoutGitLocation is an environment without the variables that tell git
+// where a repository is, which another window's repository sets in the
+// process: git then finds it from its directory alone.
+func withoutGitLocation(environ []string) []string {
+	return slices.DeleteFunc(slices.Clone(environ), func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_NAMESPACE":
+			return true
+		}
+		return false
+	})
 }

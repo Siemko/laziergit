@@ -7,6 +7,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
+
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 func (a *App) selectedFile() *models.File {
@@ -80,7 +82,11 @@ func (a *App) fileRow(c *ui.Context, pal *palette, f *models.File, sel bool) {
 			}
 		})
 		// The staged state: a check when all is staged, a dash when some.
+		conflicted := f.HasUnstagedChanges && f.HasInlineMergeConflicts
 		box := ui.ButtonBase(c.Key("stage")).Size(16, 16).Radius(4).Center().Label("Toggle staged").Tooltip("Stage / unstage (space)")
+		if conflicted {
+			box.Disabled(true).Tooltip("Resolve its conflicts to stage it")
+		}
 		fill, mark := tt.Accent, tt.AccentText
 		if sel {
 			fill, mark = tt.AccentText, tt.Accent
@@ -93,8 +99,8 @@ func (a *App) fileRow(c *ui.Context, pal *palette, f *models.File, sel bool) {
 		default:
 			box.Border(1.2, tint(sel, tt, pal.muted))
 		}
-		if box.Clicked() {
-			a.run("Staging…", func() error { return a.repo.ToggleStaged(f) })
+		if box.Clicked() && !conflicted {
+			a.run("Staging…", func(r *core.Repo) error { return r.ToggleStaged(f) })
 		}
 	}).ContextMenu(func(m *ui.Menu) {
 		label := "Stage"
@@ -102,7 +108,7 @@ func (a *App) fileRow(c *ui.Context, pal *palette, f *models.File, sel bool) {
 			label = "Unstage"
 		}
 		if m.Item(label).Shortcut(0, ui.KeySpace).Chosen() {
-			a.run("Staging…", func() error { return a.repo.ToggleStaged(f) })
+			a.run("Staging…", func(r *core.Repo) error { return r.ToggleStaged(f) })
 		}
 		m.Separator()
 		if m.Item("Discard Changes…").Shortcut(0, ui.KeyD).Chosen() {
@@ -113,12 +119,12 @@ func (a *App) fileRow(c *ui.Context, pal *palette, f *models.File, sel bool) {
 
 func (a *App) toggleAll() {
 	files := a.snap.Files
-	a.run("Staging…", func() error { return a.repo.ToggleAllStaged(files) })
+	a.run("Staging…", func(r *core.Repo) error { return r.ToggleAllStaged(files) })
 }
 
 func (a *App) confirmDiscard(f *models.File) {
 	a.confirm("Discard changes to "+f.Path+"?", "Its changes are lost; this can't be undone.", "Discard", func() {
-		a.run("Discarding…", func() error { return a.repo.Discard(f) })
+		a.run("Discarding…", func(r *core.Repo) error { return r.Discard(f) })
 	})
 }
 
@@ -152,7 +158,7 @@ func (a *App) composer(c *ui.Context, pal *palette) {
 
 func (a *App) commit() {
 	summary, desc, amend := strings.TrimSpace(a.summary), strings.TrimSpace(a.description), a.amend
-	a.run("Committing…", func() error { return a.repo.Commit(summary, desc, amend) }, func() {
+	a.run("Committing…", func(r *core.Repo) error { return r.Commit(summary, desc, amend) }, func() {
 		a.summary, a.description, a.amend = "", "", false
 		a.pane = paneList
 		a.toast("Committed", summary)

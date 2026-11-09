@@ -3,6 +3,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -70,6 +71,7 @@ type Repo struct {
 	mainBranches *git_commands.MainBranches
 	hashPool     *utils.StringPool
 	tempDir      string
+	closed       bool // under gitMu
 
 	// Path is the work tree's root.
 	Path string
@@ -83,44 +85,59 @@ var (
 	current *Repo
 )
 
+func init() {
+	// Paths given to git are file names, never patterns: a file named
+	// ":(glob)*" stands for itself, not for every file. lazygit passes no
+	// pathspec magic of its own.
+	os.Setenv("GIT_LITERAL_PATHSPECS", "1")
+}
+
+// ErrClosed is the error of a command of a repository closed.
+var ErrClosed = errors.New("the repository is closed")
+
 // enter waits for the commands of other repositories to finish, and makes
 // r current: the working directory its work tree, and git's environment
-// its own. It returns the function that leaves.
-func (r *Repo) enter() (leave func()) {
+// its own. It returns the function that leaves. When the work tree is gone,
+// as when it was moved, it fails, leaving nothing current: a command must
+// never run in another repository's directory.
+func (r *Repo) enter() (leave func(), err error) {
 	gitMu.Lock()
+	if r.closed {
+		gitMu.Unlock()
+		return nil, ErrClosed
+	}
+	if err := os.Chdir(r.Path); err != nil {
+		current = nil
+		env.UnsetGitLocationEnvVars()
+		gitMu.Unlock()
+		return nil, fmt.Errorf("the repository's folder is gone: %w", err)
+	}
 	if current != r {
-		if err := os.Chdir(r.Path); err != nil {
-			r.cmn.Log.Error(err)
-		}
 		env.SetGitLocationEnvVars(r.git.RepoPaths.GitLocationEnvVars())
 		current = r
 	}
-	return gitMu.Unlock
+	return gitMu.Unlock, nil
 }
 
 // Open opens the repository dir is in. lazygit's constructor changes the
 // working directory and git's environment, so it takes its turn as
-// commands do.
-func Open(dir string, opts Options) (*Repo, error) {
+// commands do. It blocks: call it off the UI thread.
+func Open(dir string, opts Options) (r *Repo, err error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
 	gitMu.Lock()
 	defer gitMu.Unlock()
-	// A failed Open leaves the directory as it was for the repository
-	// current; a new one is current when it opens.
-	defer func() {
-		if current != nil {
-			_ = os.Chdir(current.Path)
-			env.SetGitLocationEnvVars(current.git.RepoPaths.GitLocationEnvVars())
-		}
-	}()
+	// The repository finds itself from the directory alone, not from the
+	// git environment of the one current.
+	current = nil
+	env.UnsetGitLocationEnvVars()
 	if err := os.Chdir(abs); err != nil {
 		return nil, err
 	}
 	if opts.ConfigDir != "" {
-		if err := os.MkdirAll(opts.ConfigDir, 0o755); err != nil {
+		if err := os.MkdirAll(opts.ConfigDir, 0o700); err != nil {
 			return nil, err
 		}
 		os.Setenv("CONFIG_DIR", opts.ConfigDir)
@@ -129,6 +146,11 @@ func Open(dir string, opts Options) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			os.RemoveAll(tempDir)
+		}
+	}()
 	appConfig, err := config.NewAppConfig("laziergit", "poc", "", "", "", false, tempDir)
 	if err != nil {
 		return nil, err
@@ -166,7 +188,7 @@ func Open(dir string, opts Options) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Repo{
+	r = &Repo{
 		cmn:          cmn,
 		osCmd:        osCmd,
 		git:          git,
@@ -179,11 +201,15 @@ func Open(dir string, opts Options) (*Repo, error) {
 	return r, nil
 }
 
-// Close removes the repository's temporary files.
+// Close closes the repository: its commands fail from then on, and its
+// temporary files are removed. It waits for a command running: call it off
+// the UI thread.
 func (r *Repo) Close() {
 	gitMu.Lock()
+	r.closed = true
 	if current == r {
 		current = nil
+		env.UnsetGitLocationEnvVars()
 	}
 	gitMu.Unlock()
 	os.RemoveAll(r.tempDir)
@@ -215,8 +241,18 @@ type Snapshot struct {
 // Load reads the repository's state. background marks a refresh the user
 // didn't ask for, which takes no optional locks.
 func (r *Repo) Load(background bool) (*Snapshot, error) {
-	defer r.enter()()
-	return r.load(background)
+	return with(r, func() (*Snapshot, error) { return r.load(background) })
+}
+
+// with runs fn with r current (see enter).
+func with[T any](r *Repo, fn func() (T, error)) (T, error) {
+	leave, err := r.enter()
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	defer leave()
+	return fn()
 }
 
 func (r *Repo) load(background bool) (*Snapshot, error) {
@@ -255,47 +291,62 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 
 // FileDiff is the diff of a file of the work tree: its staged changes, or
 // those not staged yet.
-func (r *Repo) FileDiff(f *models.File, staged bool) string {
-	defer r.enter()()
-	return r.git.WorkingTree.WorktreeFileDiff(f, git_commands.DiffModePlain, staged)
+func (r *Repo) FileDiff(f *models.File, staged bool) (string, error) {
+	return with(r, func() (string, error) {
+		return r.git.WorkingTree.WorktreeFileDiff(f, git_commands.DiffModePlain, staged), nil
+	})
 }
 
 // CommitFiles lists the files a commit changes, against its first parent.
 func (r *Repo) CommitFiles(c *models.Commit) ([]*models.CommitFile, error) {
-	defer r.enter()()
-	return r.git.Loaders.CommitFileLoader.GetFilesInDiff(c.ParentRefName(), c.RefName(), false)
+	return with(r, func() ([]*models.CommitFile, error) {
+		return r.git.Loaders.CommitFileLoader.GetFilesInDiff(c.ParentRefName(), c.RefName(), false)
+	})
 }
 
 // CommitFileDiff is the diff of a file a commit changes.
 func (r *Repo) CommitFileDiff(c *models.Commit, f *models.CommitFile) (string, error) {
-	defer r.enter()()
-	return r.git.WorkingTree.ShowFileDiff(c.ParentRefName(), c.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
+	return with(r, func() (string, error) {
+		return r.git.WorkingTree.ShowFileDiff(c.ParentRefName(), c.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
+	})
 }
 
 // StashFiles lists the files a stash entry changes.
 func (r *Repo) StashFiles(e *models.StashEntry) ([]*models.CommitFile, error) {
-	defer r.enter()()
-	return r.git.Loaders.CommitFileLoader.GetFilesInDiff(e.ParentRefName(), e.RefName(), false)
+	return with(r, func() ([]*models.CommitFile, error) {
+		return r.git.Loaders.CommitFileLoader.GetFilesInDiff(e.ParentRefName(), e.RefName(), false)
+	})
 }
 
 // StashFileDiff is the diff of a file a stash entry changes.
 func (r *Repo) StashFileDiff(e *models.StashEntry, f *models.CommitFile) (string, error) {
-	defer r.enter()()
-	return r.git.WorkingTree.ShowFileDiff(e.ParentRefName(), e.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
+	return with(r, func() (string, error) {
+		return r.git.WorkingTree.ShowFileDiff(e.ParentRefName(), e.RefName(), false, f.Path, f.PreviousPath, git_commands.DiffModePlain)
+	})
 }
 
 func (r *Repo) do(fn func(g *commands.GitCommand) error) error {
-	defer r.enter()()
+	leave, err := r.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
 	return cleanError(fn(r.git))
 }
 
-// cleanError trims the output git wrapped into an error.
+// cleanError trims the output git wrapped into an error, keeping the
+// error it wraps for errors.Is.
 func cleanError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%s", strings.TrimSpace(err.Error()))
+	return trimmedError{err}
 }
+
+type trimmedError struct{ err error }
+
+func (e trimmedError) Error() string { return strings.TrimSpace(e.err.Error()) }
+func (e trimmedError) Unwrap() error { return e.err }
 
 // Tr is lazygit's English strings, as for a working tree state's title.
 func (r *Repo) Tr() *i18n.TranslationSet { return r.cmn.Tr }

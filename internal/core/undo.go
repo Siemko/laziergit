@@ -3,7 +3,10 @@ package core
 import (
 	"errors"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/jesseduffield/lazygit/pkg/commands"
 	"github.com/jesseduffield/lazygit/pkg/commands/git_commands"
@@ -75,7 +78,11 @@ var errMidRebase = errors.New("can't undo or redo in the middle of a rebase")
 // FindUndo finds the step undo (or redo) would take, walking the reflog as
 // lazygit does: each undo counts one step back, each redo one forward.
 func (r *Repo) FindUndo(redo bool) (UndoStep, error) {
-	defer r.enter()()
+	leave, err := r.enter()
+	if err != nil {
+		return UndoStep{}, err
+	}
+	defer leave()
 	if r.git.Status.WorkingTreeState().Any() {
 		return UndoStep{}, errMidRebase
 	}
@@ -155,8 +162,10 @@ func findUndo(reflog []*models.Commit, redo bool) (UndoStep, error) {
 }
 
 // ApplyUndo undoes (or redoes) a step FindUndo found, marking it in the
-// reflog. A hard reset stashes the work tree's changes around it.
-func (r *Repo) ApplyUndo(s UndoStep, redo bool, dirty bool) error {
+// reflog. A hard reset stashes the work tree's changes around it, as
+// lazygit's does, deciding so as it resets; it refuses to overwrite
+// untracked files the target has, and gives back only the stash it made.
+func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 	env := []string{"GIT_REFLOG_ACTION=" + undoAction}
 	target := s.From
 	if redo {
@@ -170,33 +179,105 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool, dirty bool) error {
 		case s.Kind == UndoCommit && !redo:
 			return g.Commit.ResetToCommit(target, "soft", env)
 		}
-		if !dirty {
+		files := g.Loaders.FileLoader.GetStatusFiles(git_commands.GetStatusFileOptions{})
+		if err := r.checkUntrackedAgainst(target, files); err != nil {
+			return err
+		}
+		submodules, _ := g.Submodule.GetConfigs(nil)
+		if !hasTrackedChanges(files, submodules) {
 			return g.Commit.ResetToCommit(target, "hard", env)
 		}
+		before := r.stashTop()
 		if err := g.Stash.Push(fmt.Sprintf("laziergit auto-stash for undo to %s", short(target))); err != nil {
 			return err
 		}
+		stashed := r.stashTop()
+		made := stashed != "" && stashed != before
 		if err := g.Commit.ResetToCommit(target, "hard", env); err != nil {
+			if made {
+				_ = g.Stash.Pop(0)
+			}
 			return err
 		}
-		return g.Stash.Pop(0)
+		if !made {
+			return nil
+		}
+		if err := g.Stash.Pop(0); err != nil {
+			return fmt.Errorf("your local changes are kept in stash@{0} (%s), which didn't apply cleanly: %w", short(stashed), err)
+		}
+		return nil
 	})
 }
 
-// HasTrackedChanges reports whether files tracked have changes, which a
-// hard reset would lose.
-func HasTrackedChanges(files []*models.File) bool {
+// hasTrackedChanges reports whether files tracked or added have changes,
+// which a hard reset would lose: lazygit's
+// IsWorkingTreeDirtyExceptSubmodules. Untracked files aren't stashed.
+func hasTrackedChanges(files []*models.File, submodules []*models.SubmoduleConfig) bool {
 	for _, f := range files {
-		if f.Tracked && (f.HasStagedChanges || f.HasUnstagedChanges) || f.Added {
+		if f.IsSubmodule(submodules) {
+			continue
+		}
+		if f.Tracked || f.HasStagedChanges {
 			return true
 		}
 	}
 	return false
 }
 
+// checkUntrackedAgainst fails when untracked files are where target has
+// files, which a hard reset to it would overwrite.
+func (r *Repo) checkUntrackedAgainst(target string, files []*models.File) error {
+	untracked := map[string]bool{}
+	for _, f := range files {
+		if f.ShortStatus == "??" {
+			untracked[strings.TrimSuffix(f.Path, "/")] = true
+		}
+	}
+	if len(untracked) == 0 {
+		return nil
+	}
+	out, err := r.git_("ls-tree", "-r", "-z", "--name-only", target)
+	if err != nil {
+		return err
+	}
+	var hit []string
+	for _, p := range strings.Split(out, "\x00") {
+		for dir := p; dir != "." && dir != ""; dir = filepath.Dir(dir) {
+			if untracked[dir] {
+				hit = append(hit, p)
+				break
+			}
+		}
+	}
+	if len(hit) > 0 {
+		return fmt.Errorf("untracked files would be overwritten: %s; move them away first", strings.Join(hit[:min(len(hit), 5)], ", "))
+	}
+	return nil
+}
+
+// stashTop is the commit refs/stash points at, empty for no stash.
+func (r *Repo) stashTop() string {
+	out, err := r.git_("rev-parse", "-q", "--verify", "refs/stash")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// git_ runs git in the repository, which must be current.
+func (r *Repo) git_(args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", r.Path}, args...)...)
+	out, err := cmd.Output()
+	return string(out), err
+}
+
 // BranchCommits loads the latest commits of a branch, with their graph.
 func (r *Repo) BranchCommits(b *models.Branch, limit int) ([]*models.Commit, [][]Pipe, error) {
-	defer r.enter()()
+	leave, err := r.enter()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer leave()
 	commits, err := r.git.Loaders.CommitLoader.GetCommits(git_commands.GetCommitsOptions{
 		Limit:              limit,
 		RefName:            b.FullRefName(),

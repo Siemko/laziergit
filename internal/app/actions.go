@@ -5,6 +5,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/jesseduffield/lazygit/pkg/commands/models"
+
+	"github.com/Siemko/laziergit/internal/core"
 )
 
 // action is a command of the app: the palette lists it, its key runs it,
@@ -35,11 +37,11 @@ func (a *App) actions() []action {
 		{title: "Focus Diff", key: ui.KeyL, keyName: "l", enabled: true, run: func() { a.focusRight() }},
 		{title: "Focus List", key: ui.KeyH, keyName: "h", enabled: true, run: func() { a.focusLeft() }},
 
-		{title: "Fetch", key: ui.KeyF, keyName: "f", hint: false, enabled: true, section: secChanges, run: a.fetch},
-		{title: "Fetch", key: ui.KeyF, keyName: "f", enabled: true, section: secBranches, run: a.fetch},
-		{title: "Pull", key: ui.KeyP, keyName: "p", enabled: true, run: a.pull},
-		{title: "Push", mods: ui.Shift, key: ui.KeyP, keyName: "P", enabled: true, run: func() { a.push(false) }},
-		{title: "Force Push (with lease)", enabled: true, run: func() {
+		{title: "Fetch", key: ui.KeyF, keyName: "f", hint: false, enabled: s != nil, section: secChanges, run: a.fetch},
+		{title: "Fetch", key: ui.KeyF, keyName: "f", enabled: s != nil, section: secBranches, run: a.fetch},
+		{title: "Pull", key: ui.KeyP, keyName: "p", enabled: s != nil, run: a.pull},
+		{title: "Push", mods: ui.Shift, key: ui.KeyP, keyName: "P", enabled: s != nil, run: func() { a.push(false) }},
+		{title: "Force Push (with lease)", enabled: s != nil, run: func() {
 			a.confirm("Force push "+a.headName()+"?", "The remote branch is overwritten, if no one pushed to it since you fetched.", "Force Push", func() { a.push(true) })
 		}},
 		{title: "Refresh", mods: ui.Cmd, key: ui.KeyR, keyName: "⌘R", enabled: true, run: func() { a.refresh(false) }},
@@ -53,8 +55,9 @@ func (a *App) actions() []action {
 		{title: "Clear Copied Commits", enabled: len(a.copied) > 0, run: func() { a.copied, a.copiedFrom = nil, "" }},
 
 		// Changes
-		{title: "Stage / Unstage File", section: secChanges, key: ui.KeySpace, keyName: "space", hint: true, enabled: file != nil,
-			run: func() { a.run("Staging…", func() error { return a.repo.ToggleStaged(file) }) }},
+		{title: "Stage / Unstage File", section: secChanges, key: ui.KeySpace, keyName: "space", hint: true,
+			enabled: file != nil && !(file.HasUnstagedChanges && file.HasInlineMergeConflicts),
+			run:     func() { a.run("Staging…", func(r *core.Repo) error { return r.ToggleStaged(file) }) }},
 		{title: "Stage / Unstage All", section: secChanges, key: ui.KeyA, keyName: "a", hint: true, enabled: hasFiles, run: a.toggleAll},
 		{title: "Discard File Changes…", section: secChanges, key: ui.KeyD, keyName: "d", hint: true, enabled: file != nil,
 			run: func() { a.confirmDiscard(file) }},
@@ -64,7 +67,7 @@ func (a *App) actions() []action {
 		{title: "Amend Last Commit", section: secChanges, mods: ui.Shift, key: ui.KeyA, keyName: "A", enabled: s != nil && len(s.Commits) > 0,
 			run: func() {
 				a.confirm("Amend the last commit with the staged changes?", "", "Amend", func() {
-					a.run("Amending…", func() error { return a.repo.Commit("", "", true) })
+					a.run("Amending…", func(r *core.Repo) error { return r.Commit("", "", true) })
 				})
 			}},
 		{title: "Stash All Changes", section: secChanges, key: ui.KeyS, keyName: "s", hint: true, enabled: hasFiles, run: a.stashAll},
@@ -72,8 +75,9 @@ func (a *App) actions() []action {
 		// History
 		{title: "Reword Commit…", section: secHistory, key: ui.KeyR, keyName: "r", hint: true, enabled: commit != nil,
 			run: func() { a.reword(a.commitSel) }},
-		{title: "Fixup Into Commit Below", section: secHistory, key: ui.KeyF, keyName: "f", hint: true, enabled: commit != nil,
-			run: func() { a.fixup(a.commitSel) }},
+		{title: "Fixup Into Commit Below", section: secHistory, key: ui.KeyF, keyName: "f", hint: true,
+			enabled: commit != nil && !commit.IsMerge() && a.commitSel+1 < len(s.Commits),
+			run:     func() { a.fixup(a.commitSel) }},
 		{title: "Drop Commit…", section: secHistory, key: ui.KeyD, keyName: "d", hint: true, enabled: commit != nil,
 			run: func() { a.drop(a.commitSel) }},
 		{title: "Move Commit Down", section: secHistory, mods: ui.Ctrl, key: ui.KeyJ, keyName: "⌃j", hint: true, enabled: commit != nil,
@@ -106,7 +110,7 @@ func (a *App) actions() []action {
 		// Stash
 		{title: "Pop Stash", section: secStash, key: ui.KeyG, keyName: "g", hint: true, enabled: stash != nil, run: func() { a.stashPop(stash) }},
 		{title: "Apply Stash", section: secStash, key: ui.KeySpace, keyName: "space", hint: true, enabled: stash != nil,
-			run: func() { a.run("Applying…", func() error { return a.repo.StashApply(stash) }) }},
+			run: func() { a.run("Applying…", func(r *core.Repo) error { return r.StashApply(stash) }) }},
 		{title: "Drop Stash…", section: secStash, key: ui.KeyD, keyName: "d", hint: true, enabled: stash != nil, run: func() { a.stashDrop(stash) }},
 	}
 	if file != nil && file.HasInlineMergeConflicts {

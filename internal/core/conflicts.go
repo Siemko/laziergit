@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,24 +149,117 @@ func (f *ConflictedFile) resolve(pickOf func(i int) (Pick, bool)) string {
 	return b.String()
 }
 
-// ReadFile reads a file of the work tree.
-func (r *Repo) ReadFile(path string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(r.Path, path))
+// ErrNotRegular is the error of reading or writing, as text, a conflicted
+// path that isn't a regular file of the work tree, as a symlink: a
+// repository's symlink could point anywhere.
+var ErrNotRegular = errors.New("not a regular file of the work tree")
+
+// maxConflictedSize is the largest file the conflict view reads.
+const maxConflictedSize = 32 << 20
+
+// workTreeFile is the full path of a file of the work tree, given by its
+// path relative to it, as git status gives it: a regular file, not a
+// symlink, in no directory a symlink leads out of the work tree to.
+func (r *Repo) workTreeFile(path string) (string, os.FileInfo, error) {
+	if !filepath.IsLocal(path) {
+		return "", nil, fmt.Errorf("%s: %w", path, ErrNotRegular)
+	}
+	full := filepath.Join(r.Path, path)
+	root, err := filepath.EvalSymlinks(r.Path)
+	if err != nil {
+		return "", nil, err
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(full))
+	if err != nil {
+		return "", nil, err
+	}
+	if rel, err := filepath.Rel(root, dir); err != nil || !filepath.IsLocal(rel) && rel != "." {
+		return "", nil, fmt.Errorf("%s: %w", path, ErrNotRegular)
+	}
+	st, err := os.Lstat(full)
+	if err != nil {
+		return "", nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return "", nil, fmt.Errorf("%s: %w", path, ErrNotRegular)
+	}
+	return full, st, nil
+}
+
+// ReadConflicted reads a conflicted file of the work tree, failing with
+// ErrNotRegular for one that isn't a regular file.
+func (r *Repo) ReadConflicted(path string) (string, error) {
+	full, st, err := r.workTreeFile(path)
+	if err != nil {
+		return "", err
+	}
+	if st.Size() > maxConflictedSize {
+		return "", fmt.Errorf("%s is too large to resolve here", path)
+	}
+	b, err := os.ReadFile(full)
 	return string(b), err
 }
 
-// WriteFile writes a file of the work tree, keeping its mode.
-func (r *Repo) WriteFile(path, content string) error {
-	full := filepath.Join(r.Path, path)
-	mode := os.FileMode(0o644)
-	if st, err := os.Stat(full); err == nil {
-		mode = st.Mode()
-	}
-	return os.WriteFile(full, []byte(content), mode)
+// ResolveConflict writes content, a resolution of the conflicted file f,
+// in place of expected, the content it was resolved from. It fails with
+// ErrStale when the file is no longer expected, as after an edit in
+// another app since, rather than overwrite that. With no conflict left in
+// content, the file is staged, as resolved; staged reports it.
+func (r *Repo) ResolveConflict(f *models.File, expected, content string) (staged bool, err error) {
+	err = r.do(func(g *commands.GitCommand) error {
+		full, st, err := r.workTreeFile(f.Path)
+		if err != nil {
+			return err
+		}
+		now, err := os.ReadFile(full)
+		if err != nil {
+			return err
+		}
+		if string(now) != expected {
+			return ErrStale
+		}
+		if err := writeAtomically(full, content, st.Mode().Perm()); err != nil {
+			return err
+		}
+		if len(ParseConflicts(content, f.ConflictMarkerSize).Conflicts) > 0 {
+			return nil
+		}
+		staged = true
+		return g.WorkingTree.StageFile(f.Path)
+	})
+	return staged, err
 }
 
-// MarkResolved stages a file whose conflicts are resolved.
+// writeAtomically replaces a file with content: a reader sees the old file
+// or the new one, never a part.
+func writeAtomically(path, content string, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".laziergit-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// MarkResolved stages a file whose conflicts are resolved: one without
+// conflict markers, or a conflict git wrote no markers for.
 func (r *Repo) MarkResolved(f *models.File) error {
+	if f.HasInlineMergeConflicts {
+		if content, err := r.ReadConflicted(f.Path); err == nil && len(ParseConflicts(content, f.ConflictMarkerSize).Conflicts) > 0 {
+			return errConflicted(f.Path)
+		}
+	}
 	return r.do(func(g *commands.GitCommand) error { return g.WorkingTree.StageFile(f.Path) })
 }
 

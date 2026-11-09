@@ -11,7 +11,7 @@ is new.
 
 ## Install
 
-With Homebrew, on macOS 13 or later:
+With Homebrew, on macOS 12 or later:
 
 ```sh
 brew install Siemko/tap/laziergit
@@ -25,12 +25,13 @@ With Go 1.27.3+ (a `laziergit` command, without the app bundle):
 go install github.com/Siemko/laziergit@latest
 ```
 
-The app isn't signed with a Developer ID yet, so macOS blocks the disk
-images of the [releases](https://github.com/Siemko/laziergit/releases) when
-they are downloaded with a browser. Homebrew and `go install` don't mark
-what they install as downloaded, so neither is blocked. To use a disk image
-anyway, clear the mark after copying the app:
-`xattr -dr com.apple.quarantine /Applications/laziergit.app`.
+The app isn't signed with a Developer ID yet, so macOS refuses to open the
+app of a disk image from the [releases](https://github.com/Siemko/laziergit/releases)
+downloaded with a browser. Homebrew and `go install` don't mark what they
+install as downloaded, so neither is refused. To use a disk image anyway,
+check it against the release's `SHA256SUMS` first (`shasum -a 256 -c
+SHA256SUMS --ignore-missing`), and only then clear the mark of the app you
+copied: `xattr -dr com.apple.quarantine /Applications/laziergit.app`.
 
 ## Run from source
 

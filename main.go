@@ -28,17 +28,16 @@ func main() {
 		fmt.Println("laziergit", version())
 		return
 	}
-	// Started from Finder or the Dock, the app has launchd's PATH, which
-	// misses Homebrew's git, gpg, git-lfs and the tools hooks run.
-	importLoginPath()
-	debugf("PATH %s", os.Getenv("PATH"))
-
 	capture := os.Getenv("LAZIERGIT_CAPTURE")
 	// Started again, as from a terminal, the app gives its arguments to
 	// the instance running, which opens their repositories.
 	if capture == "" && !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
+	// Started from Finder or the Dock, the app has launchd's PATH, which
+	// misses Homebrew's git, gpg, git-lfs and the tools hooks run.
+	importLoginPath()
+	debugf("PATH %s", os.Getenv("PATH"))
 
 	m := newManager(configDir())
 	// args are the second instance's, without its program's name.

@@ -111,6 +111,16 @@ type App struct {
 	copiedFrom string
 
 	conflicts conflictView
+	// jobs are the actions asked for, the first running.
+	jobs []job
+	// credentials answer the credential prompts git waits on.
+	credentials []func(string)
+	// closed is set once the window closed.
+	closed bool
+	// loadErr is why the first load failed; changedSince is set when the
+	// repository changed on disk while the app was busy.
+	loadErr      string
+	changedSince bool
 	// offerContinue asks, once refreshed, to continue the operation
 	// whose last conflict was resolved; toConflicts shows the first
 	// conflicted file once a command stopped on conflicts.
@@ -156,17 +166,39 @@ func New(host Host, opts core.Options) *App {
 	return a
 }
 
-// Open opens the repository dir is in, and loads it.
-func (a *App) Open(dir string) error {
-	r, err := core.Open(dir, a.opts)
-	if err != nil {
-		a.openErr = err.Error()
-		return err
+// Open opens the repository dir is in, off the UI thread, and loads it.
+// done, when set, is told how it went, on the UI thread.
+func (a *App) Open(dir string, done func(error)) {
+	opts := a.opts
+	a.host.Go(func() {
+		r, err := core.Open(dir, opts)
+		a.host.Post(func() {
+			if a.closed {
+				// The window closed while the repository opened.
+				if r != nil {
+					a.host.Go(r.Close)
+				}
+				return
+			}
+			if err != nil {
+				a.openErr = err.Error()
+			} else {
+				a.attach(r)
+			}
+			if done != nil {
+				done(err)
+			}
+		})
+	})
+}
+
+// attach shows a repository opened, in place of the one shown.
+func (a *App) attach(r *core.Repo) {
+	if old := a.repo; old != nil {
+		a.host.Go(old.Close)
 	}
-	if a.repo != nil {
-		a.repo.Close()
-	}
-	a.repo, a.snap, a.openErr = r, nil, ""
+	a.repo, a.snap, a.openErr, a.loadErr = r, nil, "", ""
+	a.jobs = nil
 	a.fileSel, a.commitSel, a.branchSel, a.stashSel = 0, 0, 0, 0
 	a.detailKey, a.diffKey = "", ""
 	a.refresh(false)
@@ -176,14 +208,20 @@ func (a *App) Open(dir string) error {
 	if a.host.Opened != nil {
 		a.host.Opened(r)
 	}
-	return nil
 }
 
-// Close closes the repository, as the window closes.
+// Close closes the repository, as the window closes: git waiting on a
+// credential is answered, so that it stops, and the repository closes
+// once its command ends, off the UI thread.
 func (a *App) Close() {
-	if a.repo != nil {
-		a.repo.Close()
+	a.closed = true
+	for _, answer := range a.credentials {
+		answer("")
+	}
+	a.credentials = nil
+	if r := a.repo; r != nil {
 		a.repo = nil
+		a.host.Go(r.Close)
 	}
 }
 
@@ -191,7 +229,11 @@ func (a *App) Close() {
 // outside the app. It skips changes the app's own commands and refreshes
 // just made, and leaves a refresh running to finish.
 func (a *App) ChangedOnDisk() {
-	if a.busy > 0 || a.loading || time.Since(a.lastRefresh) < 400*time.Millisecond {
+	if a.busy > 0 || a.loading {
+		a.changedSince = true // refreshed once the work is done
+		return
+	}
+	if time.Since(a.lastRefresh) < 400*time.Millisecond {
 		return
 	}
 	a.refresh(true)
@@ -218,6 +260,7 @@ func (a *App) refresh(background bool) {
 	}
 	repo := a.repo
 	a.loading = true
+	a.changedSince = false
 	a.host.Go(func() {
 		s, err := repo.Load(background)
 		a.host.Post(func() {
@@ -227,15 +270,22 @@ func (a *App) refresh(background bool) {
 				return
 			}
 			if err != nil {
-				a.toastErr(err)
+				if a.snap == nil {
+					a.loadErr = err.Error()
+				} else {
+					a.toastErr(err)
+				}
 				return
 			}
-			a.snap = s
+			a.snap, a.loadErr = s, ""
 			a.gen++
 			a.clampSelections()
 			if a.toConflicts {
 				a.toConflicts = false
 				a.showFirstConflict()
+			}
+			if a.changedSince && a.busy == 0 {
+				a.refresh(true)
 			}
 		})
 	})
@@ -262,34 +312,62 @@ func (a *App) clampSelections() {
 	clamp(&a.stashSel, len(a.snap.Stash))
 }
 
-// run runs a git action off the UI thread, then refreshes.
-func (a *App) run(doing string, fn func() error, after ...func()) {
-	if a.repo == nil {
+// job is an action of the window on its repository.
+type job struct {
+	repo  *core.Repo
+	doing string
+	fn    func(r *core.Repo) error
+	after []func()
+}
+
+// run runs a git action on the window's repository off the UI thread,
+// after those run before it, then refreshes. after runs, on the UI thread,
+// when it succeeded. The action gets the repository as it was when it was
+// asked for, whatever the window shows by the time it runs.
+func (a *App) run(doing string, fn func(r *core.Repo) error, after ...func()) {
+	if a.repo == nil || a.closed {
 		return
 	}
 	a.busy++
-	a.doing = doing
+	a.jobs = append(a.jobs, job{repo: a.repo, doing: doing, fn: fn, after: after})
+	if len(a.jobs) == 1 {
+		a.startJob()
+	}
+}
+
+func (a *App) startJob() {
+	j := a.jobs[0]
+	a.doing = j.doing
 	a.host.Go(func() {
-		err := fn()
-		a.host.Post(func() {
-			a.busy--
-			if a.busy == 0 {
-				a.doing = ""
-			}
-			if core.IsConflict(err) {
-				a.toasts = append(a.toasts, toastReq{title: "Conflicts to resolve", desc: "Keep a side of each conflict in Changes, then continue.", kind: "warning"})
-				a.addLog("conflicts: "+err.Error(), false)
-				a.toConflicts = true
-			} else if err != nil {
-				a.toastErr(err)
-			} else {
-				for _, f := range after {
-					f()
-				}
-			}
-			a.refresh(false)
-		})
+		err := j.fn(j.repo)
+		a.host.Post(func() { a.endJob(j, err) })
 	})
+}
+
+func (a *App) endJob(j job, err error) {
+	a.busy--
+	if len(a.jobs) > 0 {
+		a.jobs = a.jobs[1:]
+	}
+	switch {
+	case a.closed || j.repo != a.repo:
+	case core.IsConflict(err):
+		a.toasts = append(a.toasts, toastReq{title: "Conflicts to resolve", desc: "Keep a side of each conflict in Changes, then continue.", kind: "warning"})
+		a.addLog("conflicts: "+err.Error(), false)
+		a.toConflicts = true
+	case err != nil:
+		a.toastErr(err)
+	default:
+		for _, f := range j.after {
+			f()
+		}
+	}
+	if len(a.jobs) > 0 {
+		a.startJob()
+		return
+	}
+	a.doing = ""
+	a.refresh(false)
 }
 
 type toastReq struct {
@@ -335,7 +413,19 @@ func (a *App) View(c *ui.Context) {
 			a.stateBanner(c, pal)
 			a.copiedBanner(c, pal)
 			if a.snap == nil {
-				ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).Label("Loading") })
+				ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
+					if a.loadErr == "" {
+						ui.Spinner(c).Label("Loading")
+						return
+					}
+					ui.Icon(c, iconWarning).FontSize(28).TextColor(pal.deleted)
+					ui.Text(c, "The repository couldn't be read").FontSize(13).FontWeight(600)
+					ui.Text(c, a.loadErr).FontSize(12).TextColor(pal.muted).MaxWidth(520).TextAlign(ui.Center).Selectable()
+					if ui.PrimaryButton(c, "Retry").Clicked() {
+						a.loadErr = ""
+						a.refresh(false)
+					}
+				})
 				return
 			}
 			a.main(c, pal)
