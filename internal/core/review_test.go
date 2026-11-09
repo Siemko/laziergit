@@ -656,3 +656,102 @@ func TestUndoRefusesFileByAnotherCase(t *testing.T) {
 		t.Fatalf("lost %q", got)
 	}
 }
+
+// Round 5 of the review.
+
+func ignoresCase(t *testing.T, dir string) bool {
+	probe := filepath.Join(dir, "PROBE")
+	os.WriteFile(probe, nil, 0o644)
+	defer os.Remove(probe)
+	_, err := os.Stat(filepath.Join(dir, "probe"))
+	return err == nil
+}
+
+func TestUndoRefusesDirectoryByAnotherCase(t *testing.T) {
+	r, dir := newRepo(t)
+	if !ignoresCase(t, dir) {
+		t.Skip("the disk tells case apart")
+	}
+	os.MkdirAll(filepath.Join(dir, "Docs"), 0o755)
+	write(t, dir, "Docs/A.md", "a\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "docs")
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the target has a file, by another case.
+	os.MkdirAll(filepath.Join(dir, "docs", "a.md"), 0o755)
+	write(t, dir, "docs/a.md/mine.txt", "mine\n")
+	s, _ := r.FindUndo(false)
+	if err := r.ApplyUndo(s, false); err == nil {
+		t.Fatal("replaced a directory named by another case")
+	}
+	if got := readFile(t, dir, "docs/a.md/mine.txt"); got != "mine\n" {
+		t.Fatalf("lost %q", got)
+	}
+}
+
+func TestUndoAcrossDirectoryRenamedByCase(t *testing.T) {
+	r, dir := newRepo(t)
+	if !ignoresCase(t, dir) {
+		t.Skip("the disk tells case apart")
+	}
+	os.MkdirAll(filepath.Join(dir, "Docs"), 0o755)
+	write(t, dir, "Docs/a.md", "a\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "Docs")
+	git(t, dir, "mv", "Docs", "tmp")
+	git(t, dir, "mv", "tmp", "docs")
+	git(t, dir, "commit", "-q", "-m", "docs, lower")
+	write(t, dir, ".DS_Store", "finder\n") // an untracked file, as Macs have
+	if err := r.DropCommit(load(t, r).Commits, 0); err != nil {
+		t.Fatal(err)
+	}
+	if s := undo(t, r, false); s.Kind != UndoRebase {
+		t.Fatalf("undid %+v", s)
+	}
+	if got := git(t, dir, "ls-files"); !strings.Contains(got, "docs/a.md") {
+		t.Fatalf("index %q", got)
+	}
+}
+
+func TestSkipStoppingAgainIsAConflict(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "checkout", "-q", "-b", "side", "HEAD~2")
+	write(t, dir, "two.txt", "side two\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "side two")
+	write(t, dir, "three.txt", "side three\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "side three")
+	if err := r.RebaseOnto("main"); !IsConflict(err) {
+		t.Fatalf("rebase: %v", err)
+	}
+	t.Setenv("LC_ALL", "pl_PL.UTF-8")
+	t.Setenv("LANG", "pl_PL.UTF-8")
+	err := r.SkipOperation(load(t, r).State)
+	var ce conflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("skip: %v", err)
+	}
+}
+
+func TestContinueRefusedIsNoConflict(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "checkout", "-q", "-b", "side", "HEAD~2")
+	write(t, dir, "two.txt", "side two\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "side two")
+	if err := r.RebaseOnto("main"); !IsConflict(err) {
+		t.Fatalf("rebase: %v", err)
+	}
+	// Continuing with the conflict unresolved is refused: an error, not
+	// the conflict the rebase already stopped on, in any language.
+	t.Setenv("LC_ALL", "pl_PL.UTF-8")
+	t.Setenv("LANG", "pl_PL.UTF-8")
+	err := r.ContinueOperation(load(t, r).State)
+	var ce conflictError
+	if err == nil || errors.As(err, &ce) {
+		t.Fatalf("continue: %v", err)
+	}
+}

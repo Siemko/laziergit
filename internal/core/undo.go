@@ -223,8 +223,13 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 // overwrite or delete: a local file at a file's path or at a directory of
 // one, local files in a directory the target has a file at, and, in a
 // local directory of such files, a path the target writes that is there
-// already.
+// already. On a disk that ignores case, as macOS's by default, paths that
+// differ in case alone are the same.
 func (r *Repo) checkUntrackedAgainst(target string) error {
+	fold := func(p string) string { return p }
+	if r.ignoresCase() {
+		fold = strings.ToLower
+	}
 	// --directory lists a directory of untracked files as itself, with a
 	// slash; without --exclude-standard, ignored files are listed too.
 	out, err := r.git_("ls-files", "--others", "--directory", "-z")
@@ -237,10 +242,11 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		switch {
 		case p == "":
 		case strings.HasSuffix(p, "/"):
-			p = strings.TrimSuffix(p, "/")
+			p = fold(strings.TrimSuffix(p, "/"))
 			isDir[p] = true
 			local = append(local, p)
 		default:
+			p = fold(p)
 			isFile[p] = true
 			local = append(local, p)
 		}
@@ -253,41 +259,23 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 	if err != nil {
 		return err
 	}
-	index, err := r.git_("ls-files", "-z")
-	if err != nil {
-		return err
-	}
-	inIndex := map[string]bool{}
-	for _, p := range strings.Split(index, "\x00") {
-		inIndex[p] = true
-	}
 	var hit []string
-	for _, p := range strings.Split(tree, "\x00") {
-		if p == "" {
+	for _, name := range strings.Split(tree, "\x00") {
+		if name == "" {
 			continue
 		}
-		// A path the reset creates that the file system has already, by
-		// another name it takes for the same, as "docs/a.md" for
-		// "Docs/A.md" on a disk that ignores case.
-		if !inIndex[p] {
-			if st, err := os.Lstat(filepath.Join(r.Path, p)); err == nil && !st.IsDir() && !isFile[p] && !isDir[p] {
-				if !r.trackedAs(p, inIndex) {
-					hit = append(hit, p)
-					continue
-				}
-			}
-		}
+		p := fold(name)
 		for dir := p; dir != "." && dir != "/"; dir = filepath.Dir(dir) {
 			if isFile[dir] {
-				hit = append(hit, dir) // a local file where the target has a file or a directory
+				hit = append(hit, name) // a local file where the target has a file or a directory
 				break
 			}
 			if isDir[dir] {
 				// A directory of local files at the path itself, which the
 				// reset would replace by a file; or above it, which the
 				// reset writes into, overwriting only what is in its way.
-				if dir == p || r.inTheWay(dir, p) {
-					hit = append(hit, p)
+				if dir == p || r.inTheWay(name, len(dir)) {
+					hit = append(hit, name)
 				}
 				break
 			}
@@ -304,39 +292,20 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 	return nil
 }
 
-// trackedAs reports whether the file at p on disk is a tracked file under
-// another spelling of its name, as on a disk that ignores case, which the
-// reset rewrites rather than loses: the same file as one the index has.
-func (r *Repo) trackedAs(p string, inIndex map[string]bool) bool {
-	st, err := os.Stat(filepath.Join(r.Path, p))
-	if err != nil {
-		return false
-	}
-	dir := filepath.Dir(p)
-	entries, err := os.ReadDir(filepath.Join(r.Path, dir))
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		q := filepath.Join(dir, e.Name())
-		if dir == "." {
-			q = e.Name()
-		}
-		if !inIndex[q] {
-			continue
-		}
-		if other, err := os.Stat(filepath.Join(r.Path, q)); err == nil && os.SameFile(st, other) {
-			return true
-		}
-	}
-	return false
+// ignoresCase reports whether the work tree's disk takes names differing
+// in case for the same, as macOS's does by default.
+func (r *Repo) ignoresCase() bool {
+	a, errA := os.Stat(filepath.Join(r.Path, ".git"))
+	b, errB := os.Stat(filepath.Join(r.Path, ".GIT"))
+	return errA == nil && errB == nil && os.SameFile(a, b)
 }
 
-// inTheWay reports whether writing the file p, under the local directory
-// dir, meets something there: the file itself, or a file where p needs a
-// directory.
-func (r *Repo) inTheWay(dir, p string) bool {
-	for q := p; q != dir && q != "." && q != "/"; q = filepath.Dir(q) {
+// inTheWay reports whether writing the file p meets something on disk
+// below a local directory of untracked files, whose path is dirLen long:
+// the file itself, or a file where p needs a directory. The disk, asked
+// by p's spelling, answers for any other spelling it takes for the same.
+func (r *Repo) inTheWay(p string, dirLen int) bool {
+	for q := p; len(q) > dirLen && q != "." && q != "/"; q = filepath.Dir(q) {
 		st, err := os.Lstat(filepath.Join(r.Path, q))
 		if err != nil {
 			continue

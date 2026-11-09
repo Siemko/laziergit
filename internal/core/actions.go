@@ -123,17 +123,16 @@ func (e conflictError) Error() string { return e.err.Error() }
 func (e conflictError) Unwrap() error { return e.err }
 
 // stopPoint is where a repository stands, to tell whether a command
-// stopped it: the operation in progress, HEAD, and whether files conflict.
+// stopped it: the operation in progress, and the files in conflict with
+// their versions (git ls-files -u).
 type stopPoint struct {
 	state    models.WorkingTreeState
-	head     string
-	unmerged bool
+	unmerged string
 }
 
 func (r *Repo) stopPoint(g *commands.GitCommand) stopPoint {
-	head, _ := r.git_("rev-parse", "-q", "--verify", "HEAD")
 	unmerged, _ := r.git_("ls-files", "-u", "-z")
-	return stopPoint{state: g.Status.WorkingTreeState(), head: strings.TrimSpace(head), unmerged: unmerged != ""}
+	return stopPoint{state: g.Status.WorkingTreeState(), unmerged: unmerged}
 }
 
 // doMayConflict is do for commands that stop on conflicts.
@@ -145,11 +144,12 @@ func (r *Repo) doMayConflict(fn func(g *commands.GitCommand) error) error {
 			return nil
 		}
 		// Stopped by this command, rather than refused while an operation
-		// was in progress already: the operation started or moved on (a
-		// continue applying commits before the next conflict), or files
-		// came to conflict.
+		// was in progress already: the operation started, or other files,
+		// or other versions of them, came to conflict, as a continue or a
+		// skip stopping on the next commit does. A commit that failed for
+		// another reason, as a hook, leaves no conflict.
 		after := r.stopPoint(g)
-		if after.state.Any() && (after.state != before.state || after.head != before.head || after.unmerged && !before.unmerged) {
+		if after.state.Any() && (after.state != before.state || after.unmerged != "" && after.unmerged != before.unmerged) {
 			return conflictError{err}
 		}
 		return err
