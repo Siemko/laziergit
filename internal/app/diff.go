@@ -1,10 +1,19 @@
 package app
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
+
+	"github.com/Siemko/laziergit/internal/core"
+)
+
+// What a diff past what core reads shows instead (core.ErrTooLarge).
+const (
+	tooLargeTitle = "Too large to show here"
+	tooLargeHint  = "Its diff is over 8 MiB: look at it in an editor or a terminal."
 )
 
 // diffView shows the diff load returns, loading it off the UI thread when
@@ -16,6 +25,10 @@ func (a *App) diffView(c *ui.Context, pal *palette, key string, load func() (str
 			text, err := load()
 			a.host.Post(func() {
 				if a.diffKey != key {
+					return
+				}
+				if errors.Is(err, core.ErrTooLarge) {
+					a.diff, a.diffEmpty = nil, tooLargeTitle
 					return
 				}
 				if err != nil {

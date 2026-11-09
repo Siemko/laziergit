@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -30,6 +31,8 @@ type stagingView struct {
 	sticky bool // v: moving extends the range
 
 	list ui.ListState
+
+	tooLarge bool // the diff is past what core reads (core.ErrTooLarge)
 
 	spans    [][]ui.Span // each line's code, highlighted
 	dark     bool        // the theme spans were made for
@@ -266,16 +269,26 @@ func (a *App) stagingPane(c *ui.Context, pal *palette, f *models.File, staged bo
 				if s.key != key {
 					return
 				}
+				if errors.Is(err, core.ErrTooLarge) {
+					s.set(f.Path, "")
+					s.tooLarge = true
+					return
+				}
 				if err != nil {
 					a.toastErr(err)
 					return
 				}
+				s.tooLarge = false
 				s.set(f.Path, text)
 			})
 		})
 	}
 	if s.path != f.Path {
 		return // the diff of another file shows until this one's loads
+	}
+	if s.tooLarge {
+		emptyState(c, pal, iconChanges, tooLargeTitle, tooLargeHint)
+		return
 	}
 	if s.empty() {
 		emptyState(c, pal, iconChanges, "Nothing to show", "A binary file, or a change of mode.")

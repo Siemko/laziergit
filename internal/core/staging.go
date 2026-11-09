@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"errors"
 	"strings"
 
@@ -24,6 +25,12 @@ const (
 
 // ErrStale is the error of acting on a diff that is no longer the file's.
 var ErrStale = errors.New("the file changed since its diff was shown: look at it again")
+
+// staleError is ErrStale, said of something else that changed since shown.
+type staleError string
+
+func (e staleError) Error() string        { return string(e) }
+func (e staleError) Is(target error) bool { return target == ErrStale }
 
 // ApplyLines acts on some of the lines of a file's diff, as lazygit's
 // staging does: diff is the text the lines were chosen in (FileDiff's), and
@@ -71,8 +78,13 @@ func (r *Repo) ApplyLines(f *models.File, diff string, indices []int, action Lin
 	}).FormatPlain()
 
 	return r.do(func(g *commands.GitCommand) error {
-		if live := r.fileDiff(f, action == UnstageLines); live != diff {
-			return ErrStale
+		// The status as well as the diff: a file staged since the diff
+		// was shown has the same diff from the status shown.
+		if err := r.checkStatus(f); err != nil {
+			return err
+		}
+		if live, err := r.fileDiff(f, action == UnstageLines); err != nil || live != diff {
+			return cmp.Or(err, ErrStale)
 		}
 		switch {
 		case whole && action == StageLines:
@@ -81,11 +93,11 @@ func (r *Repo) ApplyLines(f *models.File, diff string, indices []int, action Lin
 			return g.WorkingTree.UnStageFile(literals(f.Names()), f.Tracked)
 		case whole && action == DiscardLines && f.ShortStatus == "??":
 			// Untracked: discarding all of it is removing it.
-			return r.discardFile(g, f)
+			return r.discardFile(g, f, false)
 		case whole && action == DiscardLines:
 			// The work tree's changes go, back to the index: a file added
 			// and changed since ("AM") keeps what is staged.
-			return r.gitRun("checkout", "--", literal(f.Path))
+			return r.checkoutWithoutRecursing("--", literal(f.Path))
 		case whole:
 			return errors.New("unexpected whole-file action")
 		}

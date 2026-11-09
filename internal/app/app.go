@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -392,6 +393,10 @@ func (a *App) endJob(j job, err error) {
 		// The banner and the conflict view say it: no toast over them.
 		a.addLog("conflicts: "+err.Error(), false)
 		a.toConflicts = true
+	case errors.Is(err, core.ErrStale):
+		// Not a failure of git's: what was shown is out of date, and the
+		// refresh below shows it as it is.
+		a.toasts = append(a.toasts, toastReq{title: err.Error(), kind: "info"})
 	case err != nil:
 		a.toastErr(err)
 	default:

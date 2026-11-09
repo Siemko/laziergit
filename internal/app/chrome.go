@@ -167,12 +167,49 @@ func (a *App) toolbar(c *ui.Context, pal *palette) {
 
 func (a *App) fetch() { a.run("Fetching…", (*core.Repo).Fetch, func() { a.toast("Fetched", "") }) }
 func (a *App) pull()  { a.run("Pulling…", (*core.Repo).Pull, func() { a.toast("Pulled", "") }) }
+
+// push pushes the branch checked out. Its first push goes to the remote
+// git's config names, or the only one; with several and no such config, the
+// user is asked which.
 func (a *App) push(force bool) {
-	if a.snap == nil {
+	if a.snap == nil || a.repo == nil {
 		return
 	}
-	head, remotes := a.snap.Head, a.snap.Remotes
-	a.run("Pushing…", func(r *core.Repo) error { return r.Push(head, remotes, force) }, func() { a.toast("Pushed", "") })
+	head := a.snap.Head
+	pushTo := func(remote string) {
+		a.run("Pushing…", func(r *core.Repo) error { return r.Push(head, remote, force) }, func() { a.toast("Pushed", "") })
+	}
+	if head == nil || head.IsTrackingRemote() {
+		pushTo("")
+		return
+	}
+	var names []string
+	for _, r := range a.snap.Remotes {
+		names = append(names, r.Name)
+	}
+	repo := a.repo
+	a.host.Go(func() {
+		remote, ask, err := repo.PushRemote(head)
+		a.host.Post(func() {
+			if a.closed || repo != a.repo {
+				return
+			}
+			if err != nil {
+				a.toastErr(err)
+				return
+			}
+			if !ask {
+				pushTo(remote)
+				return
+			}
+			d := a.prompt("Push "+head.Name+" to which remote?", remote, "Push", false, func(v string) { pushTo(strings.TrimSpace(v)) })
+			if d == nil {
+				a.toasts = append(a.toasts, toastReq{title: "Answer git's prompt first", desc: "then push again", kind: "info"})
+				return
+			}
+			d.message = "It has no upstream yet. The remotes: " + strings.Join(names, ", ") + "."
+		})
+	})
 }
 
 // stateBanner says what operation is in progress, with its actions.

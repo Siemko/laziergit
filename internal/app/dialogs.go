@@ -43,11 +43,14 @@ func (a *App) confirm(title, message, button string, ok func()) {
 		onOK: func(string) { ok() }}
 }
 
-func (a *App) prompt(title, value, button string, multiline bool, ok func(string)) {
+// prompt asks for a value, and gives the dialog that asks: nil when a
+// credential prompt shows, which it doesn't replace.
+func (a *App) prompt(title, value, button string, multiline bool, ok func(string)) *dialog {
 	if a.asking() {
-		return
+		return nil
 	}
 	a.dialog = &dialog{kind: dialogPrompt, title: title, value: value, button: button, multiline: multiline, open: true, onOK: ok}
+	return a.dialog
 }
 
 func (a *App) askCredential(kind core.Credential, ch chan string) {
@@ -118,7 +121,7 @@ func (a *App) dialogs(c *ui.Context, pal *palette) {
 	}
 	if d.kind == dialogConfirm {
 		danger := false
-		for _, verb := range []string{"Discard", "Delete", "Drop", "Abort"} {
+		for _, verb := range []string{"Discard", "Delete", "Drop", "Abort", "Force"} {
 			if strings.HasPrefix(d.button, verb) {
 				danger = true
 			}
@@ -131,7 +134,14 @@ func (a *App) dialogs(c *ui.Context, pal *palette) {
 				}
 			})
 			ui.Row(c).Gap(8).Justify(ui.End).Margin(6, 0, 0, 0).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
+				// What can't be undone takes a click, or a tab to its
+				// button: Enter, or a stray key after the one that asked,
+				// cancels.
+				cancel := ui.Button(c, "Cancel")
+				if danger {
+					cancel.AutoFocus()
+				}
+				if cancel.Clicked() {
 					finish(false)
 				}
 				// What can't be undone is in red, its hover and press too.
@@ -146,7 +156,11 @@ func (a *App) dialogs(c *ui.Context, pal *palette) {
 					th.AccentPressed = red.Mix(ui.RGB(0, 0, 0), 0.22)
 				}
 				ui.Themed(c, &th).Background(ui.Transparent).Children(func() {
-					if ui.PrimaryButton(c, d.button).AutoFocus().Clicked() {
+					ok := ui.PrimaryButton(c, d.button)
+					if !danger {
+						ok.AutoFocus()
+					}
+					if ok.Clicked() {
 						finish(true)
 					}
 				})

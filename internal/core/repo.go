@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/jesseduffield/lazygit/pkg/app/daemon"
 	"github.com/jesseduffield/lazygit/pkg/commands"
@@ -318,30 +320,91 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 // FileDiff is the diff of a file of the work tree: its staged changes, or
 // those not staged yet.
 func (r *Repo) FileDiff(f *models.File, staged bool) (string, error) {
-	return with(r, func() (string, error) { return r.fileDiff(f, staged), nil })
+	return with(r, func() (string, error) { return r.fileDiff(f, staged) })
 }
 
 // fileDiff is FileDiff with the repository current. Its paths are literal
 // pathspecs, but for a file not in the index, which git diff --no-index
-// takes as a path of the file system.
-func (r *Repo) fileDiff(f *models.File, staged bool) string {
+// takes as a path of the file system. Its only error is ErrTooLarge.
+func (r *Repo) fileDiff(f *models.File, staged bool) (string, error) {
 	noIndex := !f.GetIsTracked() && !f.GetHasStagedChanges() && !staged && f.GetIsFile()
 	paths := f.Names()
 	if !noIndex {
 		paths = literals(paths)
 	}
-	// An error is a file deleted, as lazygit takes it.
-	s, _ := r.git.WorkingTree.WorktreeFileDiffCmdObj(f, git_commands.DiffModePlain, staged, paths).RunWithOutput()
-	return s
+	s, err := boundedOutput(r.git.WorkingTree.WorktreeFileDiffCmdObj(f, git_commands.DiffModePlain, staged, paths))
+	if errors.Is(err, ErrTooLarge) {
+		return "", err
+	}
+	// Another error is a file deleted, as lazygit takes it.
+	return s, nil
 }
 
 // showFileDiff is the diff of a file between two commits.
 func (r *Repo) showFileDiff(from, to string, f *models.CommitFile) (string, error) {
-	prev := ""
+	paths := []string{literal(f.Path)}
 	if f.PreviousPath != "" {
-		prev = literal(f.PreviousPath)
+		paths = append(paths, literal(f.PreviousPath))
 	}
-	return r.git.WorkingTree.ShowFileDiff(from, to, false, literal(f.Path), prev, git_commands.DiffModePlain)
+	return boundedOutput(r.git.WorkingTree.ShowFileDiffCmdObj(from, to, false, paths, git_commands.DiffModePlain))
+}
+
+// maxDiffSize is the largest diff read: a larger one would take memory,
+// and the UI thread's time to parse and highlight it, the app can't spare.
+const maxDiffSize = 8 << 20
+
+// ErrTooLarge is the error of a diff larger than maxDiffSize.
+var ErrTooLarge = errors.New("the diff is too large to show here")
+
+// maxErrorOutput is how much of a command's standard error boundedOutput
+// keeps, for its error.
+const maxErrorOutput = 64 << 10
+
+// boundedOutput runs a command for its output, as RunWithOutput does but
+// for its standard error, which it leaves out of the output, and failing
+// with ErrTooLarge as soon as the output passes maxDiffSize: it is never
+// read whole. Of the standard error, the start is kept, for the error.
+// What the command started and left holding its output, as a filter of
+// git's, isn't waited on long: the repository is every window's.
+func boundedOutput(obj *oscommands.CmdObj) (string, error) {
+	cmd := obj.GetCmd()
+	out := &cappedWriter{max: maxDiffSize}
+	stderr := &cappedWriter{max: maxErrorOutput, drop: true}
+	cmd.Stdout, cmd.Stderr = out, stderr
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	switch {
+	case out.over:
+		return "", ErrTooLarge
+	case errors.Is(err, exec.ErrWaitDelay):
+		// git finished; what it left running held on to its output.
+	case err != nil:
+		return out.String(), fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return out.String(), nil
+}
+
+// cappedWriter keeps what is written up to max bytes. Past that, it fails
+// the write, which stops the copy from the command's pipe and closes it:
+// the command, writing on, stops on a broken pipe. With drop, it takes
+// what is past max and leaves it out instead.
+type cappedWriter struct {
+	strings.Builder
+	max  int
+	drop bool
+	over bool
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	if room := w.max - w.Len(); len(p) > room {
+		if !w.drop {
+			w.over = true
+			return 0, ErrTooLarge
+		}
+		w.Builder.Write(p[:max(room, 0)])
+		return len(p), nil
+	}
+	return w.Builder.Write(p)
 }
 
 // CommitFiles lists the files a commit changes, against its first parent.

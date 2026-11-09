@@ -189,11 +189,14 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 	return r.do(func(g *commands.GitCommand) error {
 		switch {
 		case s.Kind == UndoCheckout:
-			return g.Branch.Checkout(target, git_commands.CheckoutOptions{EnvVars: env})
+			return r.checkout(target, env)
 		case s.Kind == UndoCommit && !redo:
 			return g.Commit.ResetToCommit(target, "soft", env)
 		}
 		if err := r.checkUntrackedAgainst(target); err != nil {
+			return err
+		}
+		if err := r.checkAssumedUnchanged(); err != nil {
 			return err
 		}
 		// The stash is always asked for, rather than when the status says
@@ -206,7 +209,7 @@ func (r *Repo) ApplyUndo(s UndoStep, redo bool) error {
 		}
 		stashed := r.stashTop()
 		made := stashed != "" && stashed != before
-		if err := g.Commit.ResetToCommit(target, "hard", env); err != nil {
+		if err := r.hardReset(target, env); err != nil {
 			if made {
 				_ = g.Stash.Pop(0)
 			}
@@ -296,6 +299,77 @@ func (r *Repo) checkUntrackedAgainst(target string) error {
 		return fmt.Errorf("files git doesn't track would be overwritten: %s; move them away first", strings.Join(hit[:min(len(hit), 5)], ", "))
 	}
 	return nil
+}
+
+// hardReset is lazygit's hard ResetToCommit, but for submodules, whose
+// directories it leaves as they are, whatever submodule.recurse says: the
+// undo's stash saves no change in them, which a reset of them would lose.
+func (r *Repo) hardReset(target string, env []string) error {
+	return r.osCmd.Cmd.New([]string{"git", "-c", "submodule.recurse=false", "reset", "--hard", target, "--"}).
+		AddEnvVars("GIT_TERMINAL_PROMPT=0").AddEnvVars(env...).Run()
+}
+
+// checkAssumedUnchanged fails when a file marked assume-unchanged has
+// changes: git stash passes over it, so a hard reset would overwrite them
+// unsaved. (git's reset leaves a skip-worktree file alone.)
+func (r *Repo) checkAssumedUnchanged() error {
+	out, err := r.git_("ls-files", "-s", "-v", "-z")
+	if err != nil {
+		return fmt.Errorf("listing the index: %w", err)
+	}
+	var changed, files, blobs []string
+	for _, e := range strings.Split(out, "\x00") {
+		// "h 100644 <blob> 0\t<path>": a lowercase tag is assume-unchanged.
+		meta, path, ok := strings.Cut(e, "\t")
+		fields := strings.Fields(meta)
+		if !ok || len(fields) != 4 || fields[0] == strings.ToUpper(fields[0]) {
+			continue
+		}
+		mode, blob := fields[1], fields[2]
+		st, err := os.Lstat(filepath.Join(r.Path, path))
+		switch {
+		case errors.Is(err, fs.ErrNotExist), mode == "160000":
+			// Deleted, the reset brings it back; a submodule's commit,
+			// the reset doesn't touch what is checked out in it.
+		case err != nil:
+			changed = append(changed, path)
+		case mode == "120000":
+			// A symlink's blob is where it leads.
+			target, err := os.Readlink(filepath.Join(r.Path, path))
+			if err != nil || st.Mode()&fs.ModeSymlink == 0 {
+				changed = append(changed, path)
+			} else if h, err := r.gitIn(target, "hash-object", "--stdin"); err != nil || strings.TrimSpace(h) != blob {
+				changed = append(changed, path)
+			}
+		case !st.Mode().IsRegular():
+			changed = append(changed, path)
+		default:
+			files, blobs = append(files, path), append(blobs, blob)
+		}
+	}
+	// hash-object hashes each as git add would, through its filters. The
+	// paths go as arguments, which git takes as they are, unlike lines of
+	// --stdin-paths, which it unquotes and strips of a CR; in batches, for
+	// the system's limit on arguments.
+	for len(files) > 0 {
+		n, size := 0, 0
+		for n < len(files) && (n == 0 || size+len(files[n]) < 32<<10) {
+			size += len(files[n]) + 1
+			n++
+		}
+		hashes, err := r.git_(append([]string{"hash-object", "--"}, files[:n]...)...)
+		got := strings.Fields(hashes)
+		for i, path := range files[:n] {
+			if err != nil || len(got) != n || got[i] != blobs[i] {
+				changed = append(changed, path)
+			}
+		}
+		files, blobs = files[n:], blobs[n:]
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	return fmt.Errorf("files marked assume-unchanged have changes a reset would overwrite, which git stash doesn't save: %s; run git update-index --no-assume-unchanged on them first", strings.Join(changed[:min(len(changed), 5)], ", "))
 }
 
 // diskCollisions finds, of the target's files, those the reset would write
@@ -501,7 +575,13 @@ func (r *Repo) stashTop() string {
 
 // git_ runs git in the repository, which must be current.
 func (r *Repo) git_(args ...string) (string, error) {
+	return r.gitIn("", args...)
+}
+
+// gitIn is git_ with input.
+func (r *Repo) gitIn(input string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", r.Path}, args...)...)
+	cmd.Stdin = strings.NewReader(input)
 	out, err := cmd.Output()
 	return string(out), err
 }
