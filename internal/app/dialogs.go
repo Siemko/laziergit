@@ -82,7 +82,7 @@ func (a *App) askCredential(kind core.Credential, ch chan string) {
 	}
 	a.credentials[id] = answer
 	a.dialog = &dialog{
-		kind: dialogCredential, title: titles[kind], message: "git is asking for your " + titles[kind] + ".",
+		kind: dialogCredential, title: titles[kind], message: "git is asking for your " + strings.ToLower(titles[kind]) + ".",
 		button: "Continue", secret: kind != oscommands.Username, open: true,
 		onOK:     answer,
 		onCancel: func() { answer("") },
@@ -137,9 +137,13 @@ func (a *App) dialogs(c *ui.Context, pal *palette) {
 				// What can't be undone is in red, its hover and press too.
 				th := *tt
 				if danger {
-					th.Accent = tt.Danger
-					th.AccentHover = tt.Danger.Mix(ui.RGB(0, 0, 0), 0.12)
-					th.AccentPressed = tt.Danger.Mix(ui.RGB(0, 0, 0), 0.22)
+					red := ui.Hex("#cf222e") // white on it at 5:1 and more
+					if tt.Dark {
+						red = ui.Hex("#c43f39")
+					}
+					th.Accent = red
+					th.AccentHover = red.Mix(ui.RGB(0, 0, 0), 0.12)
+					th.AccentPressed = red.Mix(ui.RGB(0, 0, 0), 0.22)
 				}
 				ui.Themed(c, &th).Background(ui.Transparent).Children(func() {
 					if ui.PrimaryButton(c, d.button).AutoFocus().Clicked() {

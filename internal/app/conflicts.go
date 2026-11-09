@@ -332,7 +332,7 @@ func (a *App) conflictCard(c *ui.Context, pal *palette, f *models.File, i int) {
 				}
 				ui.Spacer(c)
 				if sel && focused {
-					ui.Text(c, "space").Font(codeFont).FontSize(10).Padding(1, 5).Radius(4).Background(pal.pill).TextColor(pal.muted)
+					ui.Text(c, "space").Font(codeFont).FontSize(11).Padding(1, 5).Radius(4).Background(pal.pill).TextColor(pal.muted)
 				}
 				if smallButton(c, pal, "Accept "+title, sel && focused).Clicked() {
 					a.resolveConflict(f, i, pick)

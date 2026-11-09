@@ -61,10 +61,10 @@ func (a *App) branchRow(c *ui.Context, pal *palette, b *models.Branch, sel bool)
 			ui.Text(c, "upstream gone").FontSize(11).TextColor(tint(sel, tt, pal.deleted))
 		} else if b.IsTrackingRemote() {
 			if ahead := b.AheadForPull; ahead != "" && ahead != "0" {
-				ui.Text(c, "↑"+ahead).Font(codeFont).FontSize(11).TextColor(tint(sel, tt, pal.modified))
+				ui.Text(c, "↑"+ahead).FontSize(11).FontWeight(600).FontFeatures("tnum").TextColor(tint(sel, tt, tt.Text.Alpha(0.7)))
 			}
 			if behind := b.BehindForPull; behind != "" && behind != "0" {
-				ui.Text(c, "↓"+behind).Font(codeFont).FontSize(11).TextColor(tint(sel, tt, pal.modified))
+				ui.Text(c, "↓"+behind).FontSize(11).FontWeight(600).FontFeatures("tnum").TextColor(tint(sel, tt, tt.Text.Alpha(0.7)))
 			}
 		}
 		ui.Text(c, recency(b)).FontSize(11).TextColor(tint(sel, tt, pal.muted)).Width(28).TextAlign(ui.End)
@@ -122,13 +122,23 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 			})
 		})
 	}
+	// Narrow, the buttons start at the edge, to fit on one line.
+	indent := float32(28)
+	if a.detailW > 0 && a.detailW < 420 {
+		indent = 0
+	}
 	ui.Column(c).Padding(16, 18, 14, 18).Gap(10).Shrink(0).BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
 		ui.Column(c).Gap(3).Children(func() {
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, iconBranch).FontSize(18).TextColor(tt.Accent).Shrink(0)
-				ui.Text(c, b.Name).FontSize(17).Bold().Selectable().SingleLine().Shrink(1).MinWidth(0).Tooltip(b.Name)
+				title := ui.Text(c, b.Name).FontSize(16).FontWeight(700).Selectable().Shrink(1).MinWidth(0).Tooltip(b.Name)
+				if a.detailW > 0 && a.detailW < 560 {
+					title.MaxLines(2)
+				} else {
+					title.SingleLine()
+				}
 				if b.Head {
-					ui.Text(c, "HEAD").FontSize(10).FontWeight(700).TextColor(tt.AccentText).Padding(2, 6).Radius(4).Background(tt.Accent).Shrink(0)
+					ui.Text(c, "HEAD").FontSize(11).FontWeight(700).TextColor(tt.AccentText).Padding(2, 6).Radius(4).Background(tt.Accent).Shrink(0)
 				}
 			})
 			info := "Not published"
@@ -136,11 +146,15 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 				info = fmt.Sprintf("Tracks %s/%s · ↑%s ↓%s", b.UpstreamRemote, b.UpstreamBranch, orZero(b.AheadForPull), orZero(b.BehindForPull))
 			}
 			if r := recency(b); r != "" {
-				info += " · checked out " + r + " ago"
+				if r == "now" {
+					info += " · checked out just now"
+				} else {
+					info += " · checked out " + r + " ago"
+				}
 			}
 			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine().Padding(0, 0, 0, 28)
 		})
-		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Padding(0, 0, 0, 28).Children(func() {
+		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Padding(0, 0, 0, indent).Children(func() {
 			if defaultButton(c, "Checkout", !b.Head).Height(24).Padding(0, 10).FontSize(12).Clicked() {
 				a.checkout(b)
 			}
@@ -192,7 +206,7 @@ func recency(b *models.Branch) string {
 	if b.Head || b.Recency == "*" {
 		return ""
 	}
-	return b.Recency
+	return fresh(b.Recency)
 }
 
 func orZero(s string) string {
@@ -298,7 +312,7 @@ func (a *App) stashListView(c *ui.Context, pal *palette) {
 				if branch != "" {
 					ui.Text(c, branch).FontSize(11).TextColor(tint(sel, tt, pal.muted)).SingleLine().Shrink(0).MaxWidth(140)
 				}
-				ui.Text(c, e.Recency).FontSize(11).TextColor(tint(sel, tt, pal.muted)).Shrink(0)
+				ui.Text(c, fresh(e.Recency)).FontSize(11).TextColor(tint(sel, tt, pal.muted)).Shrink(0)
 			}).ContextMenu(func(m *ui.Menu) {
 				if m.Item("Pop").Shortcut(0, ui.KeyG).Chosen() {
 					a.stashPop(e)
@@ -349,8 +363,10 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 			if branch != "" {
 				info += " · on " + branch
 			}
-			if e.Recency != "" {
-				info += " · " + e.Recency + " ago"
+			if r := fresh(e.Recency); r == "now" {
+				info += " · just now"
+			} else if r != "" {
+				info += " · " + r + " ago"
 			}
 			ui.Text(c, info).FontSize(12).TextColor(pal.muted).SingleLine()
 		})
@@ -407,4 +423,13 @@ func stashParts(name string) (branch, msg string) {
 		return b, m
 	}
 	return "", name
+}
+
+// fresh is lazygit's age of a branch or stash, as "3h", with seconds as
+// "now".
+func fresh(age string) string {
+	if n := strings.TrimSuffix(age, "s"); n != age && n != "" && strings.Trim(n, "0123456789") == "" {
+		return "now"
+	}
+	return age
 }

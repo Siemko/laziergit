@@ -193,7 +193,7 @@ func (a *App) stateBanner(c *ui.Context, pal *palette) {
 			}
 		}
 		if conflicts > 0 {
-			ui.Text(c, plural(conflicts, "conflicted file")).FontSize(12).TextColor(pal.conflict)
+			ui.Text(c, plural(conflicts, "conflicted file")).FontSize(12).FontWeight(500).TextColor(pal.modified)
 		}
 		ui.Spacer(c)
 		if ui.Button(c, "Abort").Clicked() {
@@ -372,11 +372,16 @@ func toasts(c *ui.Context, pal *palette) {
 				ui.Icon(c, icon).FontSize(15).TextColor(color).Shrink(0).Margin(1, 0, 0, 0)
 				ui.Column(c).Gap(3).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 					ui.Text(c, ts.Title).FontSize(13).FontWeight(600)
-					if ts.Description != "" {
-						d := ui.Text(c, ts.Description).FontSize(12).TextColor(pal.muted).MaxLines(4).Selectable()
-						if ts.Type == "error" {
-							d.Font(codeFont).FontSize(11)
-						}
+					switch {
+					case ts.Description == "":
+					case ts.Type == "error":
+						// git's whole message, its hint last: it scrolls
+						// rather than being cut short.
+						ui.Scroll(c.Key("detail")).MaxHeight(128).Children(func() {
+							ui.Text(c, ts.Description).Font(codeFont).FontSize(11).TextColor(pal.muted).Selectable()
+						})
+					default:
+						ui.Text(c, ts.Description).FontSize(12).TextColor(pal.muted).MaxLines(4).Selectable()
 					}
 				})
 				p.CloseButton().Size(18, 18).Radius(4).Center().Label("Close").TextColor(pal.muted).Shrink(0).

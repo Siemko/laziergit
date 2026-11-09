@@ -317,10 +317,21 @@ func (a *App) patchRow(c *ui.Context, pal *palette, f *models.File, staged bool,
 		bg, numBg, mark, sign = base.MixOklab(et.Deleted, line), base.MixOklab(et.Deleted, gutter), et.Deleted, "−"
 	}
 	if chosen {
-		// Chosen lines keep their color: their gutter fills with it.
+		// Chosen lines keep their color: their gutter fills with it, deep
+		// enough for white numbers (4.6:1 and more).
+		fill := map[bool][2]ui.Color{false: {ui.Hex("#1a7f37"), ui.Hex("#cf222e")}, true: {ui.Hex("#238636"), ui.Hex("#da3633")}}[tt.Dark]
+		mark = fill[0]
+		if l.Kind == patch.DELETION {
+			mark = fill[1]
+		}
 		numBg, numColor = mark, ui.RGB(255, 255, 255)
 		if !focused {
-			numBg = mark.Alpha(0.55).Over(base)
+			// Calmer while the diff hasn't the keys: a deeper tint, its
+			// numbers in the color.
+			numBg, numColor = base.MixOklab(mark, 0.32), mark
+			if tt.Dark {
+				numBg, numColor = base.MixOklab(mark, 0.45), ui.RGB(255, 255, 255).Alpha(0.9)
+			}
 		}
 	}
 	num := func(n int, show bool) {

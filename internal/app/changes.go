@@ -99,6 +99,9 @@ func (a *App) fileRow(c *ui.Context, pal *palette, f *models.File, sel bool) {
 				box.Background(a.accent).TextColor(white).Children(func() { ui.Icon(c, iconCheck).FontSize(11) })
 			case f.HasStagedChanges:
 				box.Background(a.accent).Children(func() { ui.Box(c).Size(8, 2).Radius(1).Background(white) })
+			case sel:
+				// Empty on the blue of a row chosen: a white outline.
+				box.Background(white.Alpha(0.12)).Border(1, white.Alpha(0.85))
 			default:
 				border := tt.Border.Mix(tt.Text, 0.3)
 				if hovered {
@@ -258,15 +261,20 @@ func conflictKind(status string) string {
 func fileName(c *ui.Context, pal *palette, tt *ui.Theme, p string, sel bool, size float32) {
 	dir, name := path.Split(p)
 	row := ui.Row(c.Key("name")).Gap(6).Grow(1).Shrink(1).MinWidth(0).AlignItems(ui.Baseline).Clip().Tooltip(p)
-	// The folder shows where a useful part of it fits beside the name.
+	// The folder shows where a useful part of it fits beside the name,
+	// and then the name keeps all of its width: shrinking it by a hair
+	// would end it in an ellipsis.
+	nameW, _ := c.MeasureText(0, ui.Span{Text: name, Size: size})
+	shrink := float32(1)
 	if room := row.Bounds().W; room > 0 && dir != "" {
-		nameW, _ := c.MeasureText(0, ui.Span{Text: name, Size: size})
-		if room-nameW-6 < 36 {
+		if room-nameW-6 < 48 {
 			dir = ""
+		} else {
+			shrink = 0
 		}
 	}
 	row.Children(func() {
-		ui.Text(c, name).FontSize(size).SingleLine().Shrink(1).MinWidth(min(48, size*4))
+		ui.Text(c, name).FontSize(size).SingleLine().Shrink(shrink).MinWidth(min(nameW, 48))
 		if dir != "" {
 			ui.Text(c, strings.TrimSuffix(dir, "/")).FontSize(size - 2).TextColor(tint(sel, tt, pal.muted)).
 				SingleLine().Shrink(1000).MinWidth(0)

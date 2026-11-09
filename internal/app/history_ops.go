@@ -76,9 +76,9 @@ func (a *App) copiedBanner(c *ui.Context, pal *palette) {
 	if len(a.copied) == 0 {
 		return
 	}
-	ui.Row(c.Key("copiedBanner")).Padding(7, 14).Gap(10).AlignItems(ui.Center).Shrink(0).Background(pal.conflict.Alpha(0.10)).
+	ui.Row(c.Key("copiedBanner")).Padding(7, 14).Gap(10).AlignItems(ui.Center).Shrink(0).Background(a.accent.Alpha(0.08)).
 		BorderWidth(0, 0, 1, 0).BorderColor(pal.border).Children(func() {
-		ui.Icon(c, iconCopy).FontSize(14).TextColor(pal.conflict)
+		ui.Icon(c, iconCopy).FontSize(14).TextColor(a.accent)
 		from := ""
 		if a.copiedFrom != "HEAD" {
 			from = " from " + a.copiedFrom

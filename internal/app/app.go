@@ -389,7 +389,7 @@ func (a *App) endJob(j job, err error) {
 	switch {
 	case a.closed || j.repo != a.repo:
 	case core.IsConflict(err):
-		a.toasts = append(a.toasts, toastReq{title: "Conflicts to resolve", desc: "Keep a side of each conflict in Changes, then continue.", kind: "warning"})
+		// The banner and the conflict view say it: no toast over them.
 		a.addLog("conflicts: "+err.Error(), false)
 		a.toConflicts = true
 	case err != nil:
@@ -509,7 +509,7 @@ func (a *App) main(c *ui.Context, pal *palette) {
 		// The list's width as the user left it, held to what leaves both
 		// panes room as the window narrows; double-clicking the divider
 		// resets it to a share of the window.
-		if a.listW != a.listShown {
+		if a.listShown != 0 && a.listW != a.listShown {
 			a.listPref = a.listW // dragged
 		}
 		bodyW := a.bodyW
@@ -636,15 +636,17 @@ func (a *App) welcome(c *ui.Context, pal *palette) {
 			}
 			// The recent repositories scroll in the room a small window has.
 			_, h := c.Size()
-			room := float32(264)
+			// Whole rows, never one cut in half.
+			rows := float32(8)
 			if h < 640 {
-				room = 168
+				rows = 4
 			}
+			room := rows * 42
 			ui.Column(c).Width(380).MaxWidthPercent(100).Margin(18, 0, 0, 0).Gap(2).Shrink(1).MinHeight(0).Children(func() {
 				ui.Text(c, "Recent").FontSize(11).FontWeight(600).TextColor(pal.muted).Padding(0, 10, 4, 10)
 				ui.Scroll(c.Key("recent")).MaxHeight(room).Children(func() {
 					for _, path := range recent[:min(len(recent), 8)] {
-						b := ui.ButtonBase(c.Key(path)).Padding(7, 10).Gap(10).Radius(7).AlignItems(ui.Center).Label(path)
+						b := ui.ButtonBase(c.Key(path)).Height(42).Padding(0, 10).Gap(10).Radius(7).AlignItems(ui.Center).Label(path)
 						if b.Hovered() {
 							b.Background(pal.hover)
 						}

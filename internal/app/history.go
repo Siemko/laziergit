@@ -121,8 +121,10 @@ func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []co
 		ui.Text(c, relTime(cm.UnixTimestamp)).FontSize(11).FontFeatures("tnum").TextColor(tint(sel, tt, pal.muted)).
 			Width(30).TextAlign(ui.End).Shrink(0)
 		// The hash is quiet; a commit not pushed yet says so with a dot.
+		// Its slot is in every row, so that the ages line up.
+		dot := ui.Box(c).Size(6, 6).Radius(3).Shrink(0)
 		if cm.Status == models.StatusUnpushed {
-			ui.Box(c).Size(6, 6).Radius(3).Background(tint(sel, tt, pal.modified)).Shrink(0).Tooltip("Not pushed")
+			dot.Background(tint(sel, tt, pal.unpushed)).Tooltip("Not pushed")
 		}
 		if room > 0 && room < 340 {
 			return
@@ -226,6 +228,11 @@ func drawGraphRow(p *ui.Painter, r ui.Rect, row []core.Pipe, cm *models.Commit, 
 	// A lane keeps its color: the column a pipe runs in (the side branch's,
 	// for one that curves into or out of the commit's).
 	color := func(pp core.Pipe) ui.Color {
+		if sel && hot {
+			// On the accent, where a blue lane would vanish: white, as
+			// the dot.
+			return tt.AccentText.Alpha(0.8)
+		}
 		lane := pp.To
 		if pp.Kind == core.Terminates {
 			lane = pp.From
@@ -314,8 +321,11 @@ func (a *App) commitDetail(c *ui.Context, pal *palette) {
 			ui.Avatar(c, cm.AuthorName, nil).FontSize(14).Shrink(0)
 			ui.Column(c).Gap(2).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Baseline).MinWidth(0).Children(func() {
-					ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(0).MaxWidth(240)
-					ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
+					ui.Text(c, cm.AuthorName).FontSize(12).FontWeight(600).SingleLine().Shrink(1).MinWidth(0).MaxWidth(240).
+						Tooltip(cm.AuthorName + " <" + cm.AuthorEmail + ">")
+					if a.detailW <= 0 || a.detailW >= 560 {
+						ui.Text(c, cm.AuthorEmail).FontSize(12).TextColor(pal.muted).SingleLine().Shrink(1).MinWidth(0)
+					}
 				})
 				ui.Row(c).Gap(6).AlignItems(ui.Baseline).Children(func() {
 					ui.Text(c, ago(cm.UnixTimestamp)).FontSize(12).TextColor(pal.muted).SingleLine()

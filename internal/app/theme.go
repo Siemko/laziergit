@@ -39,7 +39,7 @@ var (
 		renamed:  ui.Hex("#0969da"),
 		conflict: ui.Hex("#a21caf"),
 		hash:     ui.Hex("#9a6700"),
-		unpushed: ui.Hex("#cf222e"),
+		unpushed: ui.Hex("#bf8700"), // the dot of a commit not pushed
 		muted:    ui.RGBA(17, 17, 17, 0.6),
 		raised:   ui.Hex("#ffffff"),
 		graph: []ui.Color{
@@ -60,7 +60,7 @@ var (
 		renamed:  ui.Hex("#58a6ff"),
 		conflict: ui.Hex("#db61a2"),
 		hash:     ui.Hex("#d29922"),
-		unpushed: ui.Hex("#f85149"),
+		unpushed: ui.Hex("#d29922"),
 		muted:    ui.RGBA(255, 255, 255, 0.55),
 		raised:   ui.Hex("#232326"),
 		graph: []ui.Color{

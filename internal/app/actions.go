@@ -268,6 +268,10 @@ func (a *App) stagingActions(f *models.File) []action {
 type hint struct{ key, label string }
 
 func (a *App) hints() []hint {
+	if a.pane == paneSummary || a.pane == paneDescription {
+		// Typing: the keys that leave the text, not those that type.
+		return []hint{{"⌘↩", "Commit"}, {"esc", "Back to Files"}, {"⌘K", "Commands"}}
+	}
 	var out []hint
 	for _, act := range a.actions() {
 		if act.hint && act.section == a.section && act.enabled && act.pane == paneForHints(a) {
@@ -362,10 +366,11 @@ func (a *App) paletteView(c *ui.Context, pal *palette) {
 				})
 			})
 			if len(acts) == 0 {
-				list.Height(48).Children(func() {
-					ui.Column(c).Fill().Center().Children(func() {
-						ui.Text(c, "No matching commands").FontSize(12).TextColor(pal.muted)
-					})
+				// The list, empty, takes no room: the note is centered in
+				// its own.
+				list.Height(0)
+				ui.Box(c).Height(44).Center().Children(func() {
+					ui.Text(c, "No matching commands").FontSize(12).TextColor(pal.muted)
 				})
 			} else {
 				list.Height(min(float32(len(acts)), 10)*32 + 4)
