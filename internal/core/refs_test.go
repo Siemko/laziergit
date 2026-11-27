@@ -255,3 +255,31 @@ func TestSubmodules(t *testing.T) {
 		t.Fatalf("submodules left %+v", s.Submodules)
 	}
 }
+
+// The reflog read, its latest entries alone, is lazygit's reflog loader's.
+func TestReflogAsLazygits(t *testing.T) {
+	r, dir := newRepo(t)
+	git(t, dir, "checkout", "-q", "-b", "side")
+	git(t, dir, "checkout", "-q", "main")
+	git(t, dir, "reset", "-q", "--hard", "HEAD~1")
+	leave, err := r.enter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _, err := r.git.Loaders.ReflogCommitLoader.GetReflogCommits(r.hashPool, nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.reflog(3)
+	leave()
+	if err != nil || len(got) != 3 || len(want) < 3 {
+		t.Fatalf("%d entries, want 3 of %d: %v", len(got), len(want), err)
+	}
+	for i, c := range got {
+		w := want[i]
+		if c.Hash() != w.Hash() || c.Name != w.Name || c.UnixTimestamp != w.UnixTimestamp || c.Status != w.Status ||
+			strings.Join(c.Parents(), " ") != strings.Join(w.Parents(), " ") {
+			t.Fatalf("entry %d: %+v, lazygit's %+v", i, c, w)
+		}
+	}
+}

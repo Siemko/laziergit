@@ -85,6 +85,8 @@ type Repo struct {
 	Path string
 	// commonDir is the git directory the repository's worktrees share.
 	commonDir string
+	// trace, when set, is told how long each step of a load takes.
+	trace func(step string, d time.Duration)
 }
 
 var (
@@ -312,12 +314,16 @@ func with[T any](r *Repo, fn func() (T, error)) (T, error) {
 func (r *Repo) load(background bool) (*Snapshot, error) {
 	l := r.git.Loaders
 	s := &Snapshot{}
-	s.Files = l.FileLoader.GetStatusFiles(git_commands.GetStatusFileOptions{Background: background})
-	branches, err := l.BranchLoader.Load(nil, r.mainBranches, nil, false, func(f func() error) { _ = f() }, func() {})
+	var err error
+	r.timed("files", func() {
+		s.Files = l.FileLoader.GetStatusFiles(git_commands.GetStatusFileOptions{Background: background})
+	})
+	r.timed("branches", func() {
+		s.Branches, err = l.BranchLoader.Load(nil, r.mainBranches, nil, false, func(f func() error) { _ = f() }, func() {})
+	})
 	if err != nil {
 		return nil, fmt.Errorf("loading branches: %w", err)
 	}
-	s.Branches = branches
 	opts := git_commands.GetCommitsOptions{
 		Limit:                r.Limit(),
 		IncludeRebaseCommits: true,
@@ -325,23 +331,33 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 		MainBranches:         r.mainBranches,
 		HashPool:             r.hashPool,
 	}
-	for _, b := range branches {
+	for _, b := range s.Branches {
 		if b.Head {
 			s.Head = b
 			opts.RefForPushedStatus = b
 		}
 	}
-	commits, err := l.CommitLoader.GetCommits(opts)
+	r.timed("commits", func() { s.Commits, err = l.CommitLoader.GetCommits(opts) })
 	if err != nil {
 		return nil, fmt.Errorf("loading commits: %w", err)
 	}
-	s.Commits = commits
-	s.Graph = GraphRows(commits)
-	s.Stash = l.StashLoader.GetStashEntries("")
-	s.Remotes = l.RemoteLoader.GetRemotes()
-	s.State = r.git.Status.WorkingTreeState()
+	r.timed("graph", func() { s.Graph = GraphRows(s.Commits) })
+	r.timed("stash", func() { s.Stash = l.StashLoader.GetStashEntries("") })
+	r.timed("remotes", func() { s.Remotes = l.RemoteLoader.GetRemotes() })
+	r.timed("state", func() { s.State = r.git.Status.WorkingTreeState() })
 	r.loadMore(s)
 	return s, nil
+}
+
+// timed runs a step of a load, telling trace how long it took.
+func (r *Repo) timed(step string, fn func()) {
+	if r.trace == nil {
+		fn()
+		return
+	}
+	start := time.Now()
+	fn()
+	r.trace(step, time.Since(start))
 }
 
 // FileDiff is the diff of a file of the work tree: its staged changes, or

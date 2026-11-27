@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jesseduffield/lazygit/pkg/commands"
@@ -41,21 +42,57 @@ func (s *Submodule) Initialized() bool { return s.Status != '-' }
 // repository too old for them, is empty rather than failing the load.
 func (r *Repo) loadMore(s *Snapshot) {
 	l := r.git.Loaders
-	if tags, err := l.TagLoader.GetTags(); err == nil {
-		s.Tags = tags
-	}
-	if byRemote, err := l.RemoteLoader.GetRemoteBranchesByRemoteName(); err == nil {
-		for _, remote := range s.Remotes {
-			remote.Branches = byRemote[remote.Name]
+	r.timed("tags", func() {
+		if tags, err := l.TagLoader.GetTags(); err == nil {
+			s.Tags = tags
 		}
+	})
+	r.timed("remote branches", func() {
+		if byRemote, err := l.RemoteLoader.GetRemoteBranchesByRemoteName(); err == nil {
+			for _, remote := range s.Remotes {
+				remote.Branches = byRemote[remote.Name]
+			}
+		}
+	})
+	r.timed("reflog", func() {
+		if reflog, err := r.reflog(ReflogLimit); err == nil {
+			s.Reflog = reflog
+		}
+	})
+	r.timed("worktrees", func() {
+		if worktrees, err := l.Worktrees.GetWorktrees(); err == nil {
+			s.Worktrees = worktrees
+		}
+	})
+	r.timed("submodules", func() { s.Submodules = r.submodules() })
+}
+
+// reflog is the latest limit entries of HEAD's reflog, newest first, as
+// lazygit's reflog loader makes them; it reads them alone, rather than
+// the whole reflog, which a repository used for years has tens of
+// thousands of.
+func (r *Repo) reflog(limit int) ([]*models.Commit, error) {
+	out, err := r.osCmd.Cmd.New([]string{"git", "-c", "log.showSignature=false", "log", "-g",
+		"-n", strconv.Itoa(limit), "--format=%H%x00%ct%x00%gs%x00%P"}).DontLog().RunWithOutput()
+	if err != nil {
+		return nil, err
 	}
-	if reflog, _, err := l.ReflogCommitLoader.GetReflogCommits(r.hashPool, nil, "", ""); err == nil {
-		s.Reflog = reflog[:min(len(reflog), ReflogLimit)]
+	var commits []*models.Commit
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(line, "\x00", 4)
+		if len(fields) < 4 {
+			continue
+		}
+		when, _ := strconv.ParseInt(fields[1], 10, 64)
+		parents := []string{}
+		if fields[3] != "" {
+			parents = strings.Split(fields[3], " ")
+		}
+		commits = append(commits, models.NewCommit(r.hashPool, models.NewCommitOpts{
+			Hash: fields[0], Name: fields[2], UnixTimestamp: when, Status: models.StatusReflog, Parents: parents,
+		}))
 	}
-	if worktrees, err := l.Worktrees.GetWorktrees(); err == nil {
-		s.Worktrees = worktrees
-	}
-	s.Submodules = r.submodules()
+	return commits, nil
 }
 
 // submodules lists the submodules .gitmodules declares, with their state.
