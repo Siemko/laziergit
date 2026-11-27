@@ -3,7 +3,7 @@ module github.com/Siemko/laziergit
 go 1.27.3
 
 require (
-	github.com/egoist/mygo v0.8.3
+	github.com/egoist/mygo v0.10.0
 	github.com/jesseduffield/lazygit v0.66.4-0.20261108145339-bd4062a1e745
 	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/afero v1.15.0
@@ -13,6 +13,7 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
+	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -21,6 +22,7 @@ require (
 	github.com/cli/safeexec v1.0.1 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/cloudflare/circl v1.6.2 // indirect
 	github.com/cloudfoundry/jibber_jabber v0.0.0-20151120183258-bcc4c8345a21 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
@@ -31,6 +33,7 @@ require (
 	github.com/gookit/color v1.6.1 // indirect
 	github.com/jesseduffield/generics v0.0.0-20250517122708-b0b4a53a6f5c // indirect
 	github.com/karimkhaleel/jsonschema v0.0.0-20231001195015-d933f0d94ea3 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
@@ -40,8 +43,11 @@ require (
 	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/samber/lo v1.53.0 // indirect
 	github.com/sasha-s/go-deadlock v0.3.9 // indirect
+	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/xo/terminfo v1.2.0 // indirect
+	go.digitalxero.dev/rpm v0.3.4 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/image v0.46.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
