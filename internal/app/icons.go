@@ -24,6 +24,8 @@ var (
 	iconUndo     = icon(`<path d="M5 3L2 6l3 3"/><path d="M2 6h7.5a4.5 4.5 0 0 1 0 9H6"/>`)
 	iconRedo     = icon(`<path d="M11 3l3 3-3 3"/><path d="M14 6H6.5a4.5 4.5 0 0 0 0 9H10"/>`)
 	iconWarning  = icon(`<path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.5v.01"/>`)
+	// A cog.
+	iconGear = icon(`<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7L3.4 3.4"/><circle cx="8" cy="8" r="4.6"/>`)
 	// A price tag.
 	iconTag = icon(`<path d="M1.5 2.5v5l7 7 6-6-7-7h-5z"/><circle cx="5" cy="5.5" r="1.1"/>`)
 	// A clock turned back.

@@ -35,11 +35,22 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 			counts[secWorktrees] = n
 		}
 	}
+	keys := a.settings().ShowTabShortcuts
+	// keycap shows a section's key, quieter than its count.
+	keycap := func(key string) {
+		if keys && key != "" {
+			ui.Text(c, key).Font(codeFont).FontSize(10).FontWeight(500).TextColor(pal.muted).
+				Width(16).Height(16).Center().Radius(4).Border(1, pal.border).Shrink(0).Label("Shortcut " + key)
+		}
+	}
 	item := func(s section, svg *ui.SVG, label string, n int, key string) {
 		ui.SidebarItem(c, string(s), svg, label).Tooltip(label + " (" + key + ")").Children(func() {
-			if n > 0 {
-				ui.Badge(c, fmt.Sprint(n))
-			}
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				if n > 0 {
+					ui.Badge(c, fmt.Sprint(n))
+				}
+				keycap(key)
+			})
 		})
 	}
 	list := ui.Sidebar(c, &sel, func() {
@@ -58,14 +69,17 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 		if a.snap != nil && len(a.snap.Remotes) > 0 {
 			ui.SidebarSection(c, "Remotes", nil, func() {
 				for i, r := range a.snap.Remotes {
-					tip := strings.Join(r.Urls, "\n")
+					tip, key := strings.Join(r.Urls, "\n"), ""
 					if i == 0 {
-						tip += "\n(5)"
+						tip, key = tip+"\n(5)", "5"
 					}
 					ui.SidebarItem(c, "remote:"+r.Name, iconRemote, r.Name).Tooltip(tip).Children(func() {
-						if n := len(r.Branches); n > 0 {
-							ui.Badge(c, fmt.Sprint(n))
-						}
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							if n := len(r.Branches); n > 0 {
+								ui.Badge(c, fmt.Sprint(n))
+							}
+							keycap(key)
+						})
 					})
 				}
 			})
@@ -87,6 +101,9 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 		}
 		if iconButton(c, iconFolder, "Open repository… (⌘O)", false).Clicked() {
 			a.openFolder()
+		}
+		if a.host.OpenSettings != nil && iconButton(c, iconGear, "Settings (⌘,)", false).Clicked() {
+			a.host.OpenSettings()
 		}
 		ui.Spacer(c)
 		k := ui.ButtonBase(c.Key("palette")).Height(22).Padding(0, 7).Radius(5).Center().Label("Commands").Tooltip("Commands (⌘K)")
@@ -200,8 +217,24 @@ func (a *App) push(force bool) {
 		return
 	}
 	head := a.snap.Head
+	asked := force // a force push asked already
 	pushTo := func(remote string) {
-		a.run("Pushing…", func(r *core.Repo) error { return r.Push(head, remote, force) }, func() { a.toast("Pushed", "") })
+		push := func() {
+			a.run("Pushing…", func(r *core.Repo) error { return r.Push(head, remote, force) }, func() { a.toast("Pushed", "") })
+		}
+		if asked || !a.settings().ConfirmPush {
+			push()
+			return
+		}
+		to := remote
+		if to == "" && head != nil {
+			to = head.UpstreamRemote + "/" + head.UpstreamBranch
+		}
+		n := "its commits"
+		if head != nil && head.AheadForPull != "" && head.AheadForPull != "0" && head.AheadForPull != "?" {
+			n = plural(atoiOr(head.AheadForPull, 0), "commit")
+		}
+		a.confirm("Push "+a.headName()+" to "+to+"?", "It sends "+n+" to the remote.", "Push", push)
 	}
 	if head == nil || head.IsTrackingRemote() {
 		pushTo("")

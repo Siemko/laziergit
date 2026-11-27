@@ -66,6 +66,7 @@ func main() {
 		}
 	})
 	mygo.App.OnBeforeQuit(m.beforeQuit)
+	m.applyTheme()
 
 	mygo.App.WhenReady(func() {
 		mygo.App.SetMenu(m.menu())
@@ -74,7 +75,7 @@ func main() {
 		if len(dirs) == 0 {
 			if wd, err := os.Getwd(); err == nil && wd != "/" && isRepo(wd) {
 				dirs = []string{wd} // run from a terminal in a repository
-			} else {
+			} else if m.settings.RestoreSession {
 				dirs = m.lastSession()
 			}
 		}
@@ -89,6 +90,7 @@ func main() {
 		if capture != "" {
 			captureFirst(m, capture)
 		}
+		go m.fetchLoop()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

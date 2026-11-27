@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -80,4 +81,12 @@ func tint(sel bool, tt *ui.Theme, col ui.Color) ui.Color {
 		return tt.AccentText.Alpha(0.92)
 	}
 	return col
+}
+
+// atoiOr is s as a number, or def when it isn't one.
+func atoiOr(s string, def int) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return def
 }

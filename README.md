@@ -67,6 +67,7 @@ window, then quit.
 | Stash | stash all, pop, apply, drop; files and diff |
 | Remotes | fetch, pull, push (sets the upstream on first push), force-push with lease; username/password/passphrase prompts |
 | Windows | a window per repository (⌘N, ⌘O, File → Open Recent, the Window menu); opening one already open brings its window to the front; `laziergit <path>` from a terminal opens it in the app running; the windows of the last session open again; each window keeps its place |
+| Settings | a Settings window (⌘,, or the gear under the sidebar): theme, the status bar's key hints and the sidebar's shortcuts, reopening the last session, the diffs' layout and context lines, how many commits History loads, fetching in the background, asking before a push, signing off commits, the main branches; every window follows them at once |
 | App | vibrant sidebar, ⌘K command palette, lazygit's single-key bindings (`1`–`9`, `j`/`k`, `space`, `a`, `c`, `d`, `r`, `f`, `p`, `P`, `s`, `g`, `n`, `M`, `⌃j`/`⌃k`), status-bar key hints, context menus, toasts, command log (⌘L), auto-refresh on disk changes, light and dark |
 
 ## Layout
@@ -92,14 +93,15 @@ These are from lazygit, still to port:
 - bisect
 - custom commands
 - filtering and diffing modes
-- settings
 
 Limitations:
 - lazygit assumes one repository per process: it changes the working
   directory and git's environment, and some of its file operations go by
   relative paths. Windows' repositories take turns (`core.Repo.enter`), so a
   long push in one window holds back the others' git commands until it ends.
-- It uses lazygit's config format, kept in `~/Library/Application Support/laziergit`.
+- It uses lazygit's config format, kept in `~/Library/Application Support/laziergit`,
+  beside the app's own `settings.json`, whose settings take the place of
+  config.yml's same ones.
 
 Started from Finder or the Dock, the app takes its `PATH` from your login
 shell, so that git finds Homebrew's tools (gpg, git-lfs, credential helpers)

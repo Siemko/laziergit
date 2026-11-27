@@ -80,6 +80,10 @@ type Host struct {
 	// Watch, when set, watches the work tree of a repository opened, to
 	// call App.ChangedOnDisk on the UI thread, in place of the last one.
 	Watch func(path string)
+	// Settings are the app's, shared by its windows, nil for the
+	// defaults; OpenSettings shows the Settings window.
+	Settings     *Settings
+	OpenSettings func()
 }
 
 type logEntry struct {
@@ -138,7 +142,9 @@ type App struct {
 	diffText    string
 	diffStaged  int // 0 unstaged, 1 staged, for a file with both
 	unified     int // 0 unified, 1 split
-	stage       stagingView
+	// splitDefault is the settings' layout of diffs, which unified took.
+	splitDefault bool
+	stage        stagingView
 
 	// The commits of the branch chosen in Branches.
 	branchKey, branchName string
@@ -221,6 +227,9 @@ func New(host Host, opts core.Options) *App {
 	}
 	a.opts = opts
 	a.logList.FollowEnd = true
+	if a.settings().SplitDiff {
+		a.unified, a.splitDefault = 1, true
+	}
 	return a
 }
 
@@ -265,7 +274,8 @@ func (a *App) attach(r *core.Repo) {
 	a.commitAnchor, a.commitSelWas = "", 0
 	a.commitSticky, a.commitsMoved = false, [2]int{-1, -1}
 	a.detailKey, a.diffKey = "", ""
-	a.refresh(false)
+	a.loading = true // the spinner, while the settings apply
+	a.configure(func() { a.refresh(false) })
 	if a.host.Watch != nil {
 		a.host.Watch(r.Path)
 	}
@@ -609,7 +619,9 @@ func (a *App) View(c *ui.Context) {
 				return
 			}
 			a.main(c, pal)
-			a.statusBar(c, pal)
+			if a.settings().ShowKeyHints {
+				a.statusBar(c, pal)
+			}
 		})
 	})
 	a.offerToContinue()

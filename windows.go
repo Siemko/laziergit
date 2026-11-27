@@ -31,6 +31,13 @@ type manager struct {
 	recent []string
 	// quitWhenIdle is set when a quit waits for the windows' actions.
 	quitWhenIdle bool
+	// settings are the app's, which every window follows; settingsWin is
+	// the Settings window, while it is open, which settingsPane builds.
+	settings     app.Settings
+	settingsWin  *mygo.Window
+	settingsPane app.SettingsPane
+	// fetched is when the windows last fetched in the background.
+	fetched time.Time
 }
 
 // repoWindow is a window and the app in it.
@@ -43,7 +50,71 @@ type repoWindow struct {
 	opening string
 }
 
-func newManager(configDir string) *manager { return &manager{configDir: configDir} }
+func newManager(configDir string) *manager {
+	m := &manager{configDir: configDir}
+	s, err := app.LoadSettings(configDir)
+	if err != nil {
+		log.Printf("reading the settings: %v", err)
+	}
+	m.settings = s
+	return m
+}
+
+// applyTheme makes the app's appearance the settings'.
+func (m *manager) applyTheme() {
+	mygo.Theme.SetSource(mygo.ThemeSource(m.settings.Theme))
+}
+
+// settingsChanged saves the settings, and has every window follow them.
+func (m *manager) settingsChanged() {
+	if err := app.SaveSettings(m.configDir, m.settings); err != nil {
+		log.Printf("saving the settings: %v", err)
+	}
+	m.applyTheme()
+	for _, w := range m.windows {
+		w.win.Update(func() { w.app.SettingsChanged() })
+	}
+}
+
+// openSettings shows the Settings window, one for the app.
+func (m *manager) openSettings() {
+	if w := m.settingsWin; w != nil {
+		w.Restore()
+		w.Focus()
+		return
+	}
+	m.settingsPane = app.SettingsPane{S: &m.settings, Changed: m.settingsChanged}
+	w := mygo.NewWindow(mygo.WindowOptions{
+		Title:          "Settings",
+		Width:          580,
+		Height:         460,
+		MinWidth:       520,
+		MinHeight:      380,
+		StateKey:       "settings",
+		TitleBarStyle:  mygo.TitleBarHiddenInset,
+		TitleBarHeight: 52,
+		Content:        ui.View(m.settingsPane.View),
+	})
+	m.settingsWin = w
+	w.OnClosed(func() { m.settingsWin = nil })
+}
+
+// fetchLoop fetches every window's repository in the background, as often
+// as the settings say, checking each minute.
+func (m *manager) fetchLoop() {
+	for range time.Tick(time.Minute) {
+		mygo.RunOnMain(func() {
+			every := time.Duration(m.settings.FetchMinutes) * time.Minute
+			if every <= 0 || time.Since(m.fetched) < every {
+				return
+			}
+			m.fetched = time.Now()
+			for _, w := range m.windows {
+				w.win.Update(w.app.AutoFetch)
+			}
+		})
+	}
+}
 
 // path is the repository the window has, or is opening.
 func (w *repoWindow) path() string {
@@ -121,10 +192,12 @@ func (m *manager) newWindow(path string) *repoWindow {
 			m.refreshRecent()
 			m.saveSession()
 		},
-		Recent:     func() []string { return m.recent },
-		Idle:       m.idle,
-		OpenRecent: func(path string) { m.open(path, w) },
-		Watch:      func(path string) { m.watch(w, path) },
+		Recent:       func() []string { return m.recent },
+		Idle:         m.idle,
+		OpenRecent:   func(path string) { m.open(path, w) },
+		Watch:        func(path string) { m.watch(w, path) },
+		Settings:     &m.settings,
+		OpenSettings: m.openSettings,
 	}, core.Options{ConfigDir: m.configDir})
 
 	opts := mygo.WindowOptions{
@@ -186,7 +259,19 @@ func (m *manager) focused() *repoWindow {
 
 func (m *manager) menu() *mygo.Menu {
 	return mygo.NewMenu([]*mygo.MenuItem{
-		{Role: mygo.RoleAppMenu},
+		{Label: "laziergit", Submenu: []*mygo.MenuItem{
+			{Role: mygo.RoleAbout},
+			mygo.Separator(),
+			{Label: "Settings…", Accelerator: "CmdOrCtrl+,", Click: func(*mygo.MenuItem, *mygo.Window) { m.openSettings() }},
+			mygo.Separator(),
+			{Role: mygo.RoleServices},
+			mygo.Separator(),
+			{Role: mygo.RoleHide},
+			{Role: mygo.RoleHideOthers},
+			{Role: mygo.RoleUnhide},
+			mygo.Separator(),
+			{Role: mygo.RoleQuit},
+		}},
 		{Label: "File", Submenu: []*mygo.MenuItem{
 			{Label: "New Window", Accelerator: "CmdOrCtrl+N", Click: func(*mygo.MenuItem, *mygo.Window) { m.newWindow("") }},
 			{Label: "Open Repository…", Accelerator: "CmdOrCtrl+O", Click: func(*mygo.MenuItem, *mygo.Window) {

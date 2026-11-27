@@ -40,7 +40,7 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 	commits := a.snap.Commits
 	n := len(commits)
 	title := fmt.Sprintf("%d commits", n)
-	if n >= core.CommitLimit {
+	if n >= a.repo.Limit() {
 		title = fmt.Sprintf("Latest %d commits", n)
 	}
 	paneHeader(c, pal, title, nil)

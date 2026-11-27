@@ -78,6 +78,8 @@ type Repo struct {
 	// closing is set as soon as the repository is to close: commands that
 	// haven't started yet fail, without waiting for the lock.
 	closing atomic.Bool
+	// commitLimit is how many commits a snapshot loads (Configure).
+	commitLimit atomic.Int64
 
 	// Path is the work tree's root.
 	Path string
@@ -246,7 +248,8 @@ func (r *Repo) Close() {
 // Name is the work tree's directory name.
 func (r *Repo) Name() string { return filepath.Base(r.Path) }
 
-// CommitLimit is how many commits a snapshot loads.
+// CommitLimit is how many commits a snapshot loads, unless configured
+// otherwise.
 const CommitLimit = 300
 
 // Snapshot is the state of a repository at one time. It is not changed
@@ -299,7 +302,7 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 	}
 	s.Branches = branches
 	opts := git_commands.GetCommitsOptions{
-		Limit:                CommitLimit,
+		Limit:                r.Limit(),
 		IncludeRebaseCommits: true,
 		RefName:              "HEAD",
 		MainBranches:         r.mainBranches,
