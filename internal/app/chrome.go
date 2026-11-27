@@ -39,8 +39,11 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 	// keycap shows a section's key, quieter than its count.
 	keycap := func(key string) {
 		if keys && key != "" {
-			ui.Text(c, key).Font(codeFont).FontSize(10).FontWeight(500).TextColor(pal.muted).
-				Width(16).Height(16).Center().Radius(4).Border(1, pal.border).Shrink(0).Label("Shortcut " + key)
+			// The digit in the middle of its cap: a box holds it, as a
+			// text sized past its glyph draws it at its start.
+			ui.Box(c).Size(16, 16).Center().Radius(4).Border(1, pal.border).Shrink(0).Label("Shortcut " + key).Children(func() {
+				ui.Text(c, key).Font(codeFont).FontSize(10).FontWeight(500).TextColor(pal.muted).LineHeight(1)
+			})
 		}
 	}
 	item := func(s section, svg *ui.SVG, label string, n int, key string) {
@@ -54,24 +57,26 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 		})
 	}
 	list := ui.Sidebar(c, &sel, func() {
-		ui.SidebarSection(c, "Workspace", nil, func() {
-			item(secChanges, iconChanges, "Changes", counts[secChanges], "1")
-			item(secStash, iconStash, "Stashes", counts[secStash], "4")
-			item(secWorktrees, iconWorktree, "Worktrees", counts[secWorktrees], "8")
-			item(secSubmodules, iconSubmodule, "Submodules", counts[secSubmodules], "9")
-		})
+		// The sections in the order of their keys, 1 to 9 down the
+		// sidebar: those of every day, then the others, then the remotes.
 		ui.SidebarSection(c, "Repository", nil, func() {
+			item(secChanges, iconChanges, "Changes", counts[secChanges], "1")
 			item(secHistory, iconHistory, "History", 0, "2")
 			item(secBranches, iconBranch, "Branches", counts[secBranches], "3")
-			item(secTags, iconTag, "Tags", counts[secTags], "6")
-			item(secReflog, iconReflog, "Reflog", 0, "7")
+			item(secStash, iconStash, "Stashes", counts[secStash], "4")
+		})
+		ui.SidebarSection(c, "More", nil, func() {
+			item(secTags, iconTag, "Tags", counts[secTags], "5")
+			item(secReflog, iconReflog, "Reflog", 0, "6")
+			item(secWorktrees, iconWorktree, "Worktrees", counts[secWorktrees], "7")
+			item(secSubmodules, iconSubmodule, "Submodules", counts[secSubmodules], "8")
 		})
 		if a.snap != nil && len(a.snap.Remotes) > 0 {
 			ui.SidebarSection(c, "Remotes", nil, func() {
 				for i, r := range a.snap.Remotes {
 					tip, key := strings.Join(r.Urls, "\n"), ""
 					if i == 0 {
-						tip, key = tip+"\n(5)", "5"
+						tip, key = tip+"\n(9)", "9"
 					}
 					ui.SidebarItem(c, "remote:"+r.Name, iconRemote, r.Name).Tooltip(tip).Children(func() {
 						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {

@@ -40,7 +40,7 @@ func panelsRepo(t *testing.T) (*App, *ui.Tester, string, string) {
 
 func TestRemoteBranchesPanel(t *testing.T) {
 	a, tt, dir, _ := panelsRepo(t)
-	press(tt, 0, ui.Key5)
+	press(tt, 0, ui.Key9)
 	if a.section != secRemotes || a.remoteName != "origin" {
 		t.Fatalf("section %v, remote %q", a.section, a.remoteName)
 	}
@@ -71,7 +71,7 @@ func TestRemoteBranchesPanel(t *testing.T) {
 
 func TestTagsPanel(t *testing.T) {
 	a, tt, dir, bare := panelsRepo(t)
-	press(tt, 0, ui.Key6)
+	press(tt, 0, ui.Key5)
 	if !tt.HasText("v1") || !tt.HasText("Commits on v1") {
 		t.Fatalf("no v1 in %q", tt.Texts())
 	}
@@ -113,7 +113,7 @@ func TestReflogPanel(t *testing.T) {
 	git(t, dir, "reset", "-q", "--hard", "HEAD~2")
 	a.refresh(false)
 	tt.Frame()
-	press(tt, 0, ui.Key7)
+	press(tt, 0, ui.Key6)
 	if !tt.HasText("reset") || !tt.HasText("moving to HEAD~2") {
 		t.Fatalf("no reset in %q", tt.Texts())
 	}
@@ -130,7 +130,7 @@ func TestWorktreesPanel(t *testing.T) {
 	a, tt, dir := linear(t)
 	var opened []string
 	a.host.OpenRecent = func(path string) { opened = append(opened, path) }
-	press(tt, 0, ui.Key8)
+	press(tt, 0, ui.Key7)
 	if !tt.HasText("1 worktree") {
 		t.Fatalf("no worktree in %q", tt.Texts())
 	}
@@ -167,7 +167,7 @@ func TestSubmodulesPanel(t *testing.T) {
 	write(t, lib, "lib.txt", "lib\n")
 	git(t, lib, "add", ".")
 	git(t, lib, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "lib")
-	press(tt, 0, ui.Key9)
+	press(tt, 0, ui.Key8)
 	if !tt.HasText("No submodules") {
 		t.Fatalf("submodules in %q", tt.Texts())
 	}
@@ -194,6 +194,10 @@ func TestSubmodulesPanel(t *testing.T) {
 // The sidebar goes to the new sections, and to a remote's branches.
 func TestSidebarSections(t *testing.T) {
 	a, tt, _, _ := panelsRepo(t)
+	snapshot(t, tt, "sidebar")
+	tt.SetDark(true)
+	snapshot(t, tt, "sidebar-dark")
+	tt.SetDark(false)
 	for _, s := range []struct {
 		label string
 		want  section

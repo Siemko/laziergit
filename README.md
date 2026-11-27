@@ -57,11 +57,11 @@ window, then quit.
 | History | the latest 300 commits, with lazygit's graph drawn as curves, branch and tag chips, pushed/unpushed state; commit files and per-file diff; **reword, fixup, move up/down, drop** (interactive rebase); a range of commits (⇧-click, ⌘-click, a drag over the rows, `J`/`K`, ⇧↑/⇧↓, `v` range; `esc` lets go) to fix up, move, drop or copy at once, from the bar under the list or the keys; a double click rewords; continue/abort banner; `t` tags a commit |
 | Conflicts | each conflict as a card of its current, base (diff3) and incoming sides, highlighted, the lines between folded; keep a side, both, or every conflict's one side (`space`, `b`, `j`/`k`, `←`/`→`), undo (`z`); the file is staged once resolved, and the app offers to continue; Abort / Skip / Continue for merges, rebases, cherry-picks and reverts, started in the app or not |
 | Branches | checkout, new, merge, rebase onto, delete; upstream ahead/behind; each branch's commits, with their graph |
-| Remote branches | each remote's branches (`5`, or the remote in the sidebar): check out as a local branch tracking it, new branch from it, merge, rebase onto, delete on the remote, fetch the remote; their commits |
-| Tags | list, new (lightweight, or annotated with a message), check out, push to a remote, delete (`6`); their commits |
-| Reflog | HEAD's reflog (`7`): each entry's commit, files and diff; check out, new branch, copy to cherry-pick, reset soft, mixed or hard to it |
-| Worktrees | list, new (a new branch or an existing one), open in a window of its own, remove (`8`) |
-| Submodules | list with their state, add, initialize and update one or all, open in a window of its own, remove (`9`) |
+| Remote branches | each remote's branches (`9`, or the remote in the sidebar): check out as a local branch tracking it, new branch from it, merge, rebase onto, delete on the remote, fetch the remote; their commits |
+| Tags | list, new (lightweight, or annotated with a message), check out, push to a remote, delete (`5`); their commits |
+| Reflog | HEAD's reflog (`6`): each entry's commit, files and diff; check out, new branch, copy to cherry-pick, reset soft, mixed or hard to it |
+| Worktrees | list, new (a new branch or an existing one), open in a window of its own, remove (`7`) |
+| Submodules | list with their state, add, initialize and update one or all, open in a window of its own, remove (`8`) |
 | Cherry-pick | copy commits from any branch's log or the history (`C`), paste them onto the current branch (`V`), conflicts resolved as a merge's |
 | Undo / redo | lazygit's reflog undo (`z`, `Z`), interoperable with lazygit's: commits, resets, pulls, checkouts and rebases, and also cherry-picks, reverts and merges; a hard reset stashes local changes around it |
 | Stash | stash all, pop, apply, drop; files and diff |

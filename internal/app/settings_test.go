@@ -45,7 +45,7 @@ func withSettings(t *testing.T, s *Settings) (*App, *ui.Tester, string) {
 func TestTabShortcutsAndHints(t *testing.T) {
 	s := DefaultSettings()
 	a, tt, _ := withSettings(t, &s)
-	for _, label := range []string{"Shortcut 1", "Shortcut 9"} {
+	for _, label := range []string{"Shortcut 1", "Shortcut 4", "Shortcut 8"} {
 		if _, ok := tt.Find(label); !ok {
 			t.Fatalf("no %q", label)
 		}
