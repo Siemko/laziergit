@@ -84,6 +84,14 @@ type Host struct {
 	// defaults; OpenSettings shows the Settings window.
 	Settings     *Settings
 	OpenSettings func()
+	// Copies, when set, gives the commits copied to cherry-pick of the
+	// repository whose worktrees share the git directory commonDir, which
+	// its windows share; CopiesChanged has those windows show them anew.
+	Copies        func(commonDir string) *Copies
+	CopiesChanged func()
+	// Main, when set, runs fn on the UI thread whether or not the window
+	// is still open, for what is the app's rather than the window's.
+	Main func(fn func())
 }
 
 type logEntry struct {
@@ -153,9 +161,9 @@ type App struct {
 	branchCommitSel       int
 	branchCommitsList     ui.ListState
 
-	// Commits copied to cherry-pick, and the log they came from.
-	copied     []copiedCommit
-	copiedFrom string
+	// ownCopies are the commits copied to cherry-pick, in a window whose
+	// host doesn't share them among a repository's windows (copies).
+	ownCopies Copies
 
 	conflicts conflictView
 	// accent is the window's, which lists without the keys show gray.

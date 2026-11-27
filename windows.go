@@ -38,6 +38,9 @@ type manager struct {
 	settingsPane app.SettingsPane
 	// fetched is when the windows last fetched in the background.
 	fetched time.Time
+	// copies are the commits copied to cherry-pick, by the git directory
+	// of the repository whose windows, its worktrees', share them.
+	copies map[string]*app.Copies
 }
 
 // repoWindow is a window and the app in it.
@@ -97,6 +100,49 @@ func (m *manager) openSettings() {
 	})
 	m.settingsWin = w
 	w.OnClosed(func() { m.settingsWin = nil })
+}
+
+// copiesOf is the commits copied in the windows of the repository whose
+// git directory is commonDir.
+func (m *manager) copiesOf(commonDir string) *app.Copies {
+	if m.copies == nil {
+		m.copies = map[string]*app.Copies{}
+	}
+	cp := m.copies[commonDir]
+	if cp == nil {
+		cp = &app.Copies{}
+		m.copies[commonDir] = cp
+	}
+	return cp
+}
+
+// dropCopies forgets the copies of repositories no window shows any more,
+// rather than give them to a repository made at the same path later.
+//
+// While a window opens a repository, which may be a worktree of one whose
+// last window closed meanwhile, it waits for the window to have it.
+func (m *manager) dropCopies() {
+	shown := map[string]bool{}
+	for _, w := range m.windows {
+		if w.opening != "" {
+			return
+		}
+		if r := w.app.Repo(); r != nil {
+			shown[r.CommonDir()] = true
+		}
+	}
+	for dir := range m.copies {
+		if !shown[dir] {
+			delete(m.copies, dir)
+		}
+	}
+}
+
+// copiesChanged draws the windows again, which show the copies.
+func (m *manager) copiesChanged() {
+	for _, w := range m.windows {
+		w.win.Invalidate()
+	}
 }
 
 // fetchLoop fetches every window's repository in the background, as often
@@ -161,6 +207,7 @@ func (m *manager) openRoot(root string, from *repoWindow) {
 	w.opening = root
 	w.app.Open(root, func(err error) {
 		w.opening = ""
+		m.dropCopies() // put off while it opened
 		if err != nil {
 			log.Printf("opening %s: %v", root, err)
 		}
@@ -192,12 +239,15 @@ func (m *manager) newWindow(path string) *repoWindow {
 			m.refreshRecent()
 			m.saveSession()
 		},
-		Recent:       func() []string { return m.recent },
-		Idle:         m.idle,
-		OpenRecent:   func(path string) { m.open(path, w) },
-		Watch:        func(path string) { m.watch(w, path) },
-		Settings:     &m.settings,
-		OpenSettings: m.openSettings,
+		Recent:        func() []string { return m.recent },
+		Idle:          m.idle,
+		OpenRecent:    func(path string) { m.open(path, w) },
+		Watch:         func(path string) { m.watch(w, path) },
+		Settings:      &m.settings,
+		OpenSettings:  m.openSettings,
+		Copies:        m.copiesOf,
+		CopiesChanged: m.copiesChanged,
+		Main:          mygo.RunOnMain,
 	}, core.Options{ConfigDir: m.configDir})
 
 	opts := mygo.WindowOptions{
@@ -229,6 +279,7 @@ func (m *manager) newWindow(path string) *repoWindow {
 		}
 		w.app.Close()
 		m.windows = slices.DeleteFunc(m.windows, func(x *repoWindow) bool { return x == w })
+		m.dropCopies()
 		m.saveSession()
 	})
 	m.windows = append(m.windows, w)

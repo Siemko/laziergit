@@ -417,8 +417,8 @@ func TestCherryPickAndUndo(t *testing.T) {
 	tt.Key(0, ui.KeyJ)
 	tt.Key(ui.Shift, ui.KeyC)
 	tt.Frame()
-	if len(a.copied) != 2 || !tt.HasText("2 commits copied from feature/graph") {
-		t.Fatalf("copied %d: %q", len(a.copied), tt.Texts())
+	if len(a.copies().commits) != 2 || !tt.HasText("2 commits copied from feature/graph") {
+		t.Fatalf("copied %d: %q", len(a.copies().commits), tt.Texts())
 	}
 	snapshot(t, tt, "cherry-pick")
 
@@ -433,8 +433,8 @@ func TestCherryPickAndUndo(t *testing.T) {
 	}
 	tt.Frame()
 	got := strings.Split(git(t, dir, "log", "-3", "--format=%s"), "\n")
-	if got[0] != "Draw pipes as curves" || got[1] != "Draw the commit graph" || len(a.copied) != 0 {
-		t.Fatalf("log after paste: %v, copied %d", got, len(a.copied))
+	if got[0] != "Draw pipes as curves" || got[1] != "Draw the commit graph" || len(a.copies().commits) != 0 {
+		t.Fatalf("log after paste: %v, copied %d", got, len(a.copies().commits))
 	}
 
 	// z undoes the last cherry-pick commit, asking first; Z redoes it.

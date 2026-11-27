@@ -182,7 +182,7 @@ func (a *App) commitMenu(m *ui.Menu, i int) {
 	if m.Item(copyItem).Shortcut(ui.Shift, ui.KeyC).Chosen() {
 		a.copyCommits()
 	}
-	if len(a.copied) > 0 && m.Item("Paste Copied Commits…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
+	if a.hasCopies() && m.Item("Paste Copied Commits…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
 		a.pasteCopied()
 	}
 	m.Separator()

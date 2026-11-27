@@ -1,11 +1,14 @@
 package app
 
 import (
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/jesseduffield/lazygit/pkg/commands/models"
 )
 
 // linear opens, in History, a repository of commits one to five, each
@@ -282,4 +285,219 @@ func TestHistoryEnterShowsFiles(t *testing.T) {
 	if a.dialog != nil || a.pane != paneFiles {
 		t.Fatalf("dialog %+v, pane %v", a.dialog, a.pane)
 	}
+}
+
+// shared is a host's copies of each repository, as the app's windows
+// share them, and the windows drawn again as they change.
+type shared struct {
+	copies  map[string]*Copies
+	testers []*ui.Tester
+	stale   bool
+}
+
+func (s *shared) host(h *Host) {
+	h.Copies = func(dir string) *Copies {
+		if s.copies[dir] == nil {
+			s.copies[dir] = &Copies{}
+		}
+		return s.copies[dir]
+	}
+	// The app's host draws its windows again; here, the next press does.
+	h.CopiesChanged = func() { s.stale = true }
+	// The app's host runs it on the UI thread, as the tests run all.
+	h.Main = func(fn func()) { fn() }
+}
+
+// redraw draws the windows again after a change of the copies, as the
+// app's host does.
+func (s *shared) redraw() {
+	if s.stale {
+		s.stale = false
+		for _, tt := range s.testers {
+			tt.Frame()
+		}
+	}
+}
+
+// window opens dir in a window of the shared host.
+func (s *shared) window(t *testing.T, dir string) (*App, *ui.Tester) {
+	a, tt, _ := testerFor(t, dir)
+	s.host(&a.host)
+	tt.Frame()
+	s.testers = append(s.testers, tt)
+	return a, tt
+}
+
+// Commits copied in a repository's window paste in the window of one of
+// its worktrees, and no other repository's.
+func TestCopiesSharedByWorktrees(t *testing.T) {
+	a, tt, dir := linear(t)
+	s := &shared{copies: map[string]*Copies{}}
+	s.host(&a.host)
+	wt := filepath.Join(t.TempDir(), "fix")
+	git(t, dir, "worktree", "add", "-q", "-b", "fix", wt, "main~2")
+	other := t.TempDir()
+	git(t, other, "init", "-q", "-b", "main")
+	git(t, other, "commit", "-q", "--allow-empty", "-m", "elsewhere")
+
+	press(tt, ui.Shift, ui.KeyDown) // five, four
+	press(tt, ui.Shift, ui.KeyC)
+	if !tt.HasText("2 commits copied") {
+		t.Fatalf("no copies in %q", tt.Texts())
+	}
+	b, bt := s.window(t, wt)
+	c, ct := s.window(t, other)
+	if !bt.HasText("2 commits copied from main in " + filepath.Base(dir)) {
+		t.Fatalf("the worktree's window has no copies: %q", bt.Texts())
+	}
+	if ct.HasText("2 commits copied") || c.hasCopies() {
+		t.Fatal("another repository's window has the copies")
+	}
+	snapshot(t, bt, "copies-in-worktree")
+	press(bt, ui.Shift, ui.KeyV)
+	confirmWith(t, b, bt, "Cherry-pick 2 commits onto fix?", "Cherry-Pick")
+	if got := log(t, wt); got != "five four three two one" {
+		t.Fatalf("fix: %s", got)
+	}
+	// Pasted, they are gone from every window of the repository.
+	tt.Frame()
+	if a.hasCopies() || tt.HasText("2 commits copied") {
+		t.Fatalf("copies left: %q", tt.Texts())
+	}
+}
+
+// worktreeWindows opens linear's repository, and a worktree of it on fix
+// at main, in two windows sharing their copies.
+func worktreeWindows(t *testing.T) (a, b *App, at, bt *ui.Tester, dir, wt string, s *shared) {
+	a, at, dir = linear(t)
+	s = &shared{copies: map[string]*Copies{}}
+	s.host(&a.host)
+	s.testers = append(s.testers, at)
+	wt = filepath.Join(t.TempDir(), "fix")
+	git(t, dir, "worktree", "add", "-q", "-b", "fix", wt, "main")
+	b, bt = s.window(t, wt)
+	press(bt, 0, ui.Key2)
+	return a, b, at, bt, dir, wt, s
+}
+
+// pressIn sends keys to one window, then draws every window again, as the
+// app's host does when the copies changed.
+func (s *shared) press(tt *ui.Tester, mods ui.Modifiers, keys ...ui.Key) {
+	for _, k := range keys {
+		press(tt, mods, k)
+		s.redraw()
+	}
+}
+
+// A paste empties the copies only while they are those it pasted.
+func TestPasteKeepsNewerCopies(t *testing.T) {
+	a, b, at, bt, _, wt, s := worktreeWindows(t)
+	git(t, wt, "reset", "-q", "--hard", "HEAD~2") // fix at three
+	b.refresh(false)
+	bt.Frame()
+	s.press(at, 0, ui.KeyJ)        // four
+	s.press(at, ui.Shift, ui.KeyC) // copied
+	s.press(bt, ui.Shift, ui.KeyV) // the paste of four asks
+	// Meanwhile, a copy of five in the first window.
+	s.press(at, 0, ui.KeyK)
+	s.press(at, ui.Shift, ui.KeyC)
+	confirmWith(t, b, bt, "Cherry-pick 1 commit onto fix?", "Cherry-Pick")
+	if got := log(t, wt); got != "four three two one" {
+		t.Fatalf("fix: %s", got)
+	}
+	if got := copied(a); got != "five" {
+		t.Fatalf("copies after the paste: %q", got)
+	}
+}
+
+// copied is the subjects of the commits copied, in their order.
+func copied(a *App) string {
+	var out []string
+	for _, cc := range a.copies().commits {
+		out = append(out, cc.commit.Name)
+	}
+	return strings.Join(out, " ")
+}
+
+// A commit copied in one worktree uncopies in another, whose log it is in
+// too; a range there copies whole, those copied already with the others.
+func TestCopiesAcrossLogs(t *testing.T) {
+	a, b, at, bt, _, _, s := worktreeWindows(t)
+	s.press(at, ui.Shift, ui.KeyC) // five, from main's window
+	if !b.isCopied(b.snap.Commits[0]) {
+		t.Fatal("five isn't copied in the worktree's window")
+	}
+	s.press(bt, ui.Shift, ui.KeyC) // uncopies it
+	if a.hasCopies() {
+		t.Fatalf("still copied: %q", copied(a))
+	}
+	s.press(at, ui.Shift, ui.KeyC)    // five again, from main's log
+	s.press(bt, ui.Shift, ui.KeyDown) // five and four, in the worktree
+	s.press(bt, ui.Shift, ui.KeyC)
+	if got := copied(a); got != "five four" {
+		t.Fatalf("copied %q", got)
+	}
+	if !at.HasText("2 commits copied from fix in fix") {
+		t.Fatalf("banner: %q", at.Texts())
+	}
+	// Uncopied, the copies say nothing more of where they came from.
+	s.press(bt, ui.Shift, ui.KeyC)
+	if cp := a.copies(); cp.source != "" || cp.label != "" || cp.worktree != "" {
+		t.Fatalf("copies left %+v", cp)
+	}
+}
+
+// Copies from a log that changed since take their places in it as it is
+// now, which order the paste: a parent before its child.
+func TestCopiesFollowTheirLog(t *testing.T) {
+	a, tt, dir := linear(t)
+	log1 := slices.Clone(a.snap.Commits) // five four three two one
+	src := a.copySource("feature")
+	cp := a.copies()
+	cp.add(src, log1, []int{1}) // four, at 1
+	// Two commits on top: four is at 3 now, five at 2.
+	for _, name := range []string{"six", "seven"} {
+		write(t, dir, name+".txt", name+"\n")
+		git(t, dir, "add", ".")
+		git(t, dir, "commit", "-q", "-m", name)
+	}
+	a.refresh(false)
+	tt.Frame()
+	log2 := a.snap.Commits
+	cp.add(src, log2, []int{2})
+	if got := places(cp); got != "four@3 five@2" {
+		t.Fatalf("copies %s", got)
+	}
+	// A log that doesn't load them, as a branch's past its 200 commits,
+	// keeps them, older than those it has, in their order.
+	cp.add(src, log2[:2], []int{0})
+	if got := places(cp); got != "five@2 four@3 seven@0" {
+		t.Fatalf("copies %s", got)
+	}
+}
+
+// A reflog repeats commits: a copy keeps the row it was copied at.
+func TestCopiesKeepTheirReflogRow(t *testing.T) {
+	a, _, _ := linear(t)
+	five, four := a.snap.Commits[0], a.snap.Commits[1]
+	reflog := []*models.Commit{five, four, five} // five again, older
+	src := a.copySource("the reflog")
+	for _, rows := range [][]int{{2, 1}, {1, 2}} {
+		cp := &Copies{}
+		for _, i := range rows {
+			cp.add(src, reflog, []int{i})
+		}
+		if got := places(cp); !strings.Contains(got, "five@2") || !strings.Contains(got, "four@1") {
+			t.Fatalf("copied %v: %s", rows, got)
+		}
+	}
+}
+
+// places is the copies, each at its place in its log.
+func places(cp *Copies) string {
+	var out []string
+	for _, cc := range cp.commits {
+		out = append(out, fmt.Sprintf("%s@%d", cc.commit.Name, cc.index))
+	}
+	return strings.Join(out, " ")
 }

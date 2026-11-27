@@ -32,3 +32,14 @@ func TestRepoArgs(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// A repository's copies go with its last window, rather than wait for a
+// repository made at its path later.
+func TestDropCopies(t *testing.T) {
+	m := &manager{}
+	m.copiesOf("/repo/.git")
+	m.dropCopies()
+	if len(m.copies) != 0 {
+		t.Fatalf("copies kept: %v", m.copies)
+	}
+}

@@ -62,7 +62,7 @@ window, then quit.
 | Reflog | HEAD's reflog (`6`): each entry's commit, files and diff; check out, new branch, copy to cherry-pick, reset soft, mixed or hard to it |
 | Worktrees | list, new (a new branch or an existing one), open in a window of its own, remove (`7`) |
 | Submodules | list with their state, add, initialize and update one or all, open in a window of its own, remove (`8`) |
-| Cherry-pick | copy commits from any branch's log or the history (`C`), paste them onto the current branch (`V`), conflicts resolved as a merge's |
+| Cherry-pick | copy commits from any branch's log, a tag's, the reflog or the history (`C`), paste them onto the current branch (`V`), conflicts resolved as a merge's; the windows of a repository and of its worktrees share the commits copied, so a commit copied in one worktree pastes in another |
 | Undo / redo | lazygit's reflog undo (`z`, `Z`), interoperable with lazygit's: commits, resets, pulls, checkouts and rebases, and also cherry-picks, reverts and merges; a hard reset stashes local changes around it |
 | Stash | stash all, pop, apply, drop; files and diff |
 | Remotes | fetch, pull, push (sets the upstream on first push), force-push with lease; username/password/passphrase prompts |

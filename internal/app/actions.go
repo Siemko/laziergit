@@ -64,8 +64,8 @@ func (a *App) actions() []action {
 
 		{title: "Undo", key: ui.KeyZ, keyName: "z", enabled: s != nil, run: func() { a.undo(false) }},
 		{title: "Redo", mods: ui.Shift, key: ui.KeyZ, keyName: "Z", enabled: s != nil, run: func() { a.undo(true) }},
-		{title: "Paste Copied Commits…", mods: ui.Shift, key: ui.KeyV, keyName: "V", enabled: len(a.copied) > 0, run: a.pasteCopied},
-		{title: "Clear Copied Commits", enabled: len(a.copied) > 0, run: func() { a.copied, a.copiedFrom = nil, "" }},
+		{title: "Paste Copied Commits…", mods: ui.Shift, key: ui.KeyV, keyName: "V", enabled: a.hasCopies(), run: a.pasteCopied},
+		{title: "Clear Copied Commits", enabled: a.hasCopies(), run: a.clearCopies},
 
 		// Changes
 		{title: "Stage / Unstage File", section: secChanges, key: ui.KeySpace, keyName: "space", hint: true,

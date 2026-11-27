@@ -248,15 +248,19 @@ func (a *App) adjacent() (lo, hi int, ok bool) {
 // already, takes them out of the copies.
 func (a *App) copyCommits() {
 	commits, rows := a.snap.Commits, a.chosenCommits()
+	cp := a.copies()
 	all := true
 	for _, i := range rows {
-		all = all && a.isCopied(commits[i])
+		all = all && cp.has(commits[i].Hash())
 	}
-	for _, i := range rows {
-		if all || !a.isCopied(commits[i]) {
-			a.toggleCopy("HEAD", commits, i)
+	if all {
+		for _, i := range rows {
+			cp.remove(commits[i].Hash())
 		}
+	} else {
+		cp.add(a.copySource("HEAD"), commits, rows)
 	}
+	a.copiesChanged()
 }
 
 func (a *App) dropChosen() {

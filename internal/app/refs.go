@@ -208,7 +208,7 @@ func (a *App) refCommits(c *ui.Context, pal *palette, name string) {
 				if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
 					a.toggleCopy(name, commits, i)
 				}
-				if len(a.copied) > 0 && m.Item("Paste Copied Commits onto "+a.headName()+"…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
+				if a.hasCopies() && m.Item("Paste Copied Commits onto "+a.headName()+"…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
 					a.pasteCopied()
 				}
 			})

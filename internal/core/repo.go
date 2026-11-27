@@ -83,6 +83,8 @@ type Repo struct {
 
 	// Path is the work tree's root.
 	Path string
+	// commonDir is the git directory the repository's worktrees share.
+	commonDir string
 }
 
 var (
@@ -221,6 +223,7 @@ func Open(dir string, opts Options) (r *Repo, err error) {
 		hashPool:     &utils.StringPool{},
 		tempDir:      tempDir,
 		Path:         git.RepoPaths.WorktreePath(),
+		commonDir:    realPath(git.RepoPaths.RepoGitDirPath()),
 	}
 	current = r
 	return r, nil
@@ -243,6 +246,20 @@ func (r *Repo) Close() {
 	}
 	gitMu.Unlock()
 	os.RemoveAll(r.tempDir)
+}
+
+// CommonDir is the git directory a repository and its worktrees share,
+// which tells the windows of one repository from those of another: their
+// commits are the same objects.
+func (r *Repo) CommonDir() string { return r.commonDir }
+
+// realPath is path with its symbolic links followed, or as it is when
+// they can't be.
+func realPath(path string) string {
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		return p
+	}
+	return filepath.Clean(path)
 }
 
 // Name is the work tree's directory name.
