@@ -3,3 +3,4 @@ dist/
 *.png
 !resources/icon.png
 !docs/images/*.png
+.DS_Store
