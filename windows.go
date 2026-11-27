@@ -312,6 +312,7 @@ func (m *manager) menu() *mygo.Menu {
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "laziergit", Submenu: []*mygo.MenuItem{
 			{Role: mygo.RoleAbout},
+			updatesMenuItem(),
 			mygo.Separator(),
 			{Label: "Settings…", Accelerator: "CmdOrCtrl+,", Click: func(*mygo.MenuItem, *mygo.Window) { m.openSettings() }},
 			mygo.Separator(),

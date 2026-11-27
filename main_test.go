@@ -43,3 +43,15 @@ func TestDropCopies(t *testing.T) {
 		t.Fatalf("copies kept: %v", m.copies)
 	}
 }
+
+func TestInCellar(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/opt/homebrew/Cellar/laziergit/0.6.0/laziergit.app/Contents/MacOS/laziergit": true,
+		"/usr/local/Cellar/laziergit/0.6.0/laziergit.app/Contents/MacOS/laziergit":    true,
+		"/Applications/laziergit.app/Contents/MacOS/laziergit":                        false,
+	} {
+		if got := inCellar(path); got != want {
+			t.Errorf("%s: %v", path, got)
+		}
+	}
+}

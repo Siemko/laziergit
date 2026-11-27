@@ -67,6 +67,7 @@ func main() {
 	})
 	mygo.App.OnBeforeQuit(m.beforeQuit)
 	m.applyTheme()
+	useUpdater()
 
 	mygo.App.WhenReady(func() {
 		mygo.App.SetMenu(m.menu())

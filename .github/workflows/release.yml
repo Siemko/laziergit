@@ -1,6 +1,8 @@
 # Builds the macOS app when a version tag is pushed, and publishes it on a
 # release: the app in a tarball per architecture, which the Homebrew
-# formula installs, and the disk images.
+# formula installs and installed apps update to, with its signed update
+# manifest and deltas, and the disk images. The release notes are the
+# version's section of CHANGELOG.md.
 #
 # The app is signed ad hoc, not with a Developer ID: Gatekeeper blocks the
 # disk images downloaded from a browser (see the README), while Homebrew's
@@ -44,14 +46,36 @@ jobs:
           git config --global user.name CI
           git config --global user.email ci@example.com
           go test ./...
+      - name: Check the changelog has the version's notes
+        run: |
+          awk -v v="## $VERSION" '$0 == v { found = 1; next } found && /^## / { exit } found' CHANGELOG.md > notes.md
+          if ! grep -q . notes.md; then
+            echo "CHANGELOG.md has no section ## $VERSION" >&2
+            exit 1
+          fi
       - name: Build
-        run: go tool mygo build -platform darwin/arm64,darwin/amd64 -skip-notarize
+        # The key signs the update archives, which installed apps check
+        # against mygo.json's public key; the token finds the releases
+        # before, for delta updates.
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$MYGO_UPDATER_PRIVATE_KEY" ]; then
+            echo "the secret MYGO_UPDATER_PRIVATE_KEY is missing: installed apps couldn't update" >&2
+            exit 1
+          fi
+          go tool mygo build -platform darwin/arm64,darwin/amd64 -skip-notarize
       - name: Package
+        # The archives are the build's own, which the manifests sign and
+        # Homebrew's formula installs; the deltas update from the versions
+        # before.
         run: |
           mkdir dist
           for arch in arm64 amd64; do
-            tar -czf "dist/laziergit-$VERSION-darwin-$arch.tar.gz" -C "build/darwin-$arch" laziergit.app
-            cp "build/darwin-$arch/laziergit-$VERSION-$arch.dmg" dist/
+            dir="build/darwin-$arch"
+            cp "$dir/laziergit-$VERSION-darwin-$arch.tar.gz" "$dir/update-darwin-$arch.json" "$dir/laziergit-$VERSION-$arch.dmg" dist/
+            find "$dir" -maxdepth 1 -name '*.delta' -exec cp {} dist/ \;
           done
           (cd dist && shasum -a 256 * > SHA256SUMS)
           cat dist/SHA256SUMS
@@ -61,4 +85,4 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --title "laziergit $VERSION" --generate-notes
+            --verify-tag --title "laziergit $VERSION" --notes-file notes.md
