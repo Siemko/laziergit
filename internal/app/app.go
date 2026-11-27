@@ -23,9 +23,29 @@ const (
 	secHistory  section = "history"
 	secBranches section = "branches"
 	secStash    section = "stash"
+	// secRemotes is the branches of one remote, remoteName.
+	secRemotes    section = "remotes"
+	secTags       section = "tags"
+	secReflog     section = "reflog"
+	secWorktrees  section = "worktrees"
+	secSubmodules section = "submodules"
 )
 
-var sectionOrder = []section{secChanges, secHistory, secBranches, secStash}
+var sectionOrder = []section{secChanges, secHistory, secBranches, secStash, secRemotes, secTags, secReflog, secWorktrees, secSubmodules}
+
+// sectionTitles are the sections' names, as the toolbar shows them.
+var sectionTitles = map[section]string{
+	secChanges: "Changes", secHistory: "History", secBranches: "Branches", secStash: "Stashes",
+	secRemotes: "Remote Branches", secTags: "Tags", secReflog: "Reflog", secWorktrees: "Worktrees", secSubmodules: "Submodules",
+}
+
+// refSection reports whether a section's detail is the commits of a ref,
+// which the keys go into (paneFiles).
+func refSection(s section) bool { return s == secBranches || s == secRemotes || s == secTags }
+
+// filesSection reports whether a section's detail is a commit's files and
+// diff, which the keys go into (paneFiles, then paneDiff).
+func filesSection(s section) bool { return s == secHistory || s == secStash || s == secReflog }
 
 // pane is where the keyboard is, for FocusBind.
 type pane int
@@ -87,16 +107,26 @@ type App struct {
 	sidebarW, listW, filesW float32
 
 	// Lists and what they chose.
-	filesList, commitsList, branchesList, stashList, detailFilesList ui.ListState
-	fileSel, commitSel, branchSel, stashSel, detailFileSel           int
+	filesList, commitsList, branchesList, stashList, detailFilesList        ui.ListState
+	fileSel, commitSel, branchSel, stashSel, detailFileSel                  int
+	remoteBranchesList, tagsList, reflogList, worktreesList, submodulesList ui.ListState
+	remoteBranchSel, tagSel, reflogSel, worktreeSel, submoduleSel           int
+	// remoteName is the remote whose branches secRemotes shows.
+	remoteName string
+	// picked is an item an action made, chosen once it is loaded.
+	picked *pick
 	// commitsChosen is History's range, by hash, beside the commit the
-	// keys are on (commitSel); commitSticky is v, which makes j and k
-	// extend it; commitsMoved is the rows a range moved to, chosen again
-	// once the log is loaded, its hashes new.
+	// keys are on (commitSel); commitAnchor is the commit it extends
+	// from; commitSticky is v, which makes j and k extend it;
+	// commitsMoved is the rows a range moved to, chosen again once the
+	// log is loaded, its hashes new; commitIn is the last input the list
+	// saw, and commitSelWas commitSel as the last frame left it.
 	commitsChosen ui.Selection[string]
+	commitAnchor  string
 	commitSticky  bool
 	commitsMoved  [2]int
-	commitSelSeen int // commitSel as the app last set it, to see the list's own moves
+	commitIn      commitInput
+	commitSelWas  int
 
 	// The detail of the row chosen.
 	detailKey   string
@@ -228,8 +258,11 @@ func (a *App) attach(r *core.Repo) {
 	a.repo, a.snap, a.openErr, a.loadErr = r, nil, "", ""
 	a.jobs = nil
 	a.fileSel, a.commitSel, a.branchSel, a.stashSel = 0, 0, 0, 0
-	a.commitSelSeen = 0
+	a.remoteBranchSel, a.tagSel, a.reflogSel, a.worktreeSel, a.submoduleSel = 0, 0, 0, 0, 0
+	a.remoteName = ""
+	a.commitsList.Choose(0)
 	a.commitsChosen.Clear()
+	a.commitAnchor, a.commitSelWas = "", 0
 	a.commitSticky, a.commitsMoved = false, [2]int{-1, -1}
 	a.detailKey, a.diffKey = "", ""
 	a.refresh(false)
@@ -290,7 +323,13 @@ func (a *App) ChangedOnDisk() {
 
 // ShowSection shows a section of the sidebar: changes, history, branches
 // or stash.
-func (a *App) ShowSection(name string) { a.goTo(section(name)) }
+func (a *App) ShowSection(name string) {
+	if section(name) == secRemotes {
+		a.goToRemotes()
+		return
+	}
+	a.goTo(section(name))
+}
 
 // Repo is the repository open, nil before one is.
 func (a *App) Repo() *core.Repo { return a.repo }
@@ -359,7 +398,69 @@ func (a *App) clampSelections() {
 	clamp(&a.commitSel, len(a.snap.Commits))
 	clamp(&a.branchSel, len(a.snap.Branches))
 	clamp(&a.stashSel, len(a.snap.Stash))
+	clamp(&a.remoteBranchSel, len(a.remoteBranches()))
+	clamp(&a.tagSel, len(a.snap.Tags))
+	clamp(&a.reflogSel, len(a.snap.Reflog))
+	clamp(&a.worktreeSel, len(a.snap.Worktrees))
+	clamp(&a.submoduleSel, len(a.snap.Submodules))
 	a.loadCommitRange()
+	a.applyPick()
+}
+
+// pick is an item made by an action, to choose once the snapshot after it
+// is loaded: in section sec, the one of key, or, without, row.
+type pick struct {
+	sec section
+	key string
+	row int
+}
+
+// pickAfterLoad chooses the item of key in section sec once the repository
+// is loaded again, as a branch just made: the lists otherwise keep the
+// item chosen before.
+func (a *App) pickAfterLoad(sec section, key string) { a.picked = &pick{sec: sec, key: key} }
+
+func (a *App) applyPick() {
+	p := a.picked
+	if p == nil {
+		return
+	}
+	a.picked = nil
+	find := func(n int, key func(i int) string) int {
+		if p.key == "" {
+			return p.row
+		}
+		for i := range n {
+			if key(i) == p.key {
+				return i
+			}
+		}
+		return -1
+	}
+	s := a.snap
+	var i int
+	var sel *int
+	var st *ui.ListState
+	switch p.sec {
+	case secBranches:
+		i, sel, st = find(len(s.Branches), func(i int) string { return s.Branches[i].Name }), &a.branchSel, &a.branchesList
+	case secStash:
+		i, sel, st = find(len(s.Stash), func(i int) string { return s.Stash[i].Hash }), &a.stashSel, &a.stashList
+	case secTags:
+		i, sel, st = find(len(s.Tags), func(i int) string { return s.Tags[i].Name }), &a.tagSel, &a.tagsList
+	case secWorktrees:
+		i, sel, st = find(len(s.Worktrees), func(i int) string { return s.Worktrees[i].Path }), &a.worktreeSel, &a.worktreesList
+	case secSubmodules:
+		i, sel, st = find(len(s.Submodules), func(i int) string { return s.Submodules[i].Path }), &a.submoduleSel, &a.submodulesList
+	default:
+		return
+	}
+	if i < 0 {
+		return
+	}
+	*sel = i
+	st.Choose(i)
+	st.ScrollIntoView(i)
 }
 
 // job is an action of the window on its repository.
@@ -573,6 +674,16 @@ func (a *App) listPane(c *ui.Context, pal *palette) {
 		a.branchList(c, pal)
 	case secStash:
 		a.stashListView(c, pal)
+	case secRemotes:
+		a.remoteBranchList(c, pal)
+	case secTags:
+		a.tagList(c, pal)
+	case secReflog:
+		a.reflogListView(c, pal)
+	case secWorktrees:
+		a.worktreeList(c, pal)
+	case secSubmodules:
+		a.submoduleList(c, pal)
 	}
 }
 
@@ -586,6 +697,16 @@ func (a *App) detailPane(c *ui.Context, pal *palette) {
 		a.branchDetail(c, pal)
 	case secStash:
 		a.stashDetail(c, pal)
+	case secRemotes:
+		a.remoteBranchDetail(c, pal)
+	case secTags:
+		a.tagDetail(c, pal)
+	case secReflog:
+		a.reflogDetail(c, pal)
+	case secWorktrees:
+		a.worktreeDetail(c, pal)
+	case secSubmodules:
+		a.submoduleDetail(c, pal)
 	}
 }
 

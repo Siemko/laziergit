@@ -99,29 +99,9 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 		return
 	}
 	tt := c.Theme()
-	key := fmt.Sprintf("%d:%s", a.gen, b.Name)
-	if key != a.branchKey {
-		if a.branchName != b.Name {
-			a.branchCommits, a.branchGraph, a.branchCommitSel = nil, nil, 0
-			a.branchCommitsList = ui.ListState{}
-		}
-		a.branchKey, a.branchName = key, b.Name
-		repo := a.repo
-		a.host.Go(func() {
-			commits, graph, err := repo.BranchCommits(b, branchCommitLimit)
-			a.host.Post(func() {
-				if a.branchKey != key {
-					return
-				}
-				if err != nil {
-					a.toastErr(err)
-					return
-				}
-				a.branchCommits, a.branchGraph = commits, graph
-				a.branchCommitSel = max(0, min(a.branchCommitSel, len(commits)-1))
-			})
-		})
-	}
+	a.loadRefCommits("branch:"+b.Name, func(r *core.Repo) ([]*models.Commit, [][]core.Pipe, error) {
+		return r.BranchCommits(b, branchCommitLimit)
+	})
 	// Narrow, the buttons start at the edge, to fit on one line.
 	indent := float32(28)
 	if a.detailW > 0 && a.detailW < 420 {
@@ -174,8 +154,44 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 			}
 		})
 	})
+	a.refCommits(c, pal, b.Name)
+}
+
+// loadRefCommits loads the commits of the ref named id, as a branch's, for
+// refCommits to show, when the ref or the repository changed.
+func (a *App) loadRefCommits(id string, load func(r *core.Repo) ([]*models.Commit, [][]core.Pipe, error)) {
+	key := fmt.Sprintf("%d:%s", a.gen, id)
+	if key == a.branchKey {
+		return
+	}
+	if a.branchName != id {
+		a.branchCommits, a.branchGraph, a.branchCommitSel = nil, nil, 0
+		a.branchCommitsList = ui.ListState{}
+	}
+	a.branchKey, a.branchName = key, id
+	repo := a.repo
+	a.host.Go(func() {
+		commits, graph, err := load(repo)
+		a.host.Post(func() {
+			if a.branchKey != key {
+				return
+			}
+			if err != nil {
+				a.toastErr(err)
+				return
+			}
+			a.branchCommits, a.branchGraph = commits, graph
+			a.branchCommitSel = max(0, min(a.branchCommitSel, len(commits)-1))
+		})
+	})
+}
+
+// refCommits is the commits loadRefCommits loaded, of the ref named name:
+// those of a branch, a remote branch or a tag. The keys go into them as
+// into a commit's files (paneFiles), and copy them to cherry-pick.
+func (a *App) refCommits(c *ui.Context, pal *palette, name string) {
 	commits, graph := a.branchCommits, a.branchGraph
-	paneHeader(c, pal, "Commits on "+b.Name, func() {
+	paneHeader(c, pal, "Commits on "+name, func() {
 		if len(commits) > 0 && a.detailW >= 560 {
 			ui.Text(c, "⇧C copies to cherry-pick").FontSize(11).TextColor(pal.muted).SingleLine().Shrink(0)
 		}
@@ -190,14 +206,34 @@ func (a *App) branchDetail(c *ui.Context, pal *palette) {
 			a.commitRow(c, pal, commits[i], graph[i], gw, i == a.branchCommitSel, hot, a.detailW).ContextMenu(func(m *ui.Menu) {
 				a.branchCommitSel = i
 				if m.Item(copyLabel(a.isCopied(commits[i]))).Shortcut(ui.Shift, ui.KeyC).Chosen() {
-					a.toggleCopy(b.Name, commits, i)
+					a.toggleCopy(name, commits, i)
 				}
 				if len(a.copied) > 0 && m.Item("Paste Copied Commits onto "+a.headName()+"…").Shortcut(ui.Shift, ui.KeyV).Chosen() {
 					a.pasteCopied()
 				}
 			})
-		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneFiles).FocusRing(false).Label("Branch commits")
+		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneFiles).FocusRing(false).Label("Commits on " + name)
 	})
+}
+
+// refName is the name of the ref whose commits refCommits shows: the
+// branch, remote branch or tag chosen.
+func (a *App) refName() string {
+	switch a.section {
+	case secBranches:
+		if b := a.selectedBranch(); b != nil {
+			return b.Name
+		}
+	case secRemotes:
+		if b := a.selectedRemoteBranch(); b != nil {
+			return b.FullName()
+		}
+	case secTags:
+		if t := a.selectedTag(); t != nil {
+			return t.Name
+		}
+	}
+	return ""
 }
 
 // recency is how long ago a branch was checked out; lazygit's "*" for the
@@ -233,7 +269,7 @@ func (a *App) newBranch() {
 
 func (a *App) newBranchFrom(base string) {
 	a.prompt("New branch from "+base, "", "Create", false, func(name string) {
-		a.run("Creating "+name+"…", func(r *core.Repo) error { return r.NewBranch(name, base) }, func() { a.branchSel = 0 })
+		a.run("Creating "+name+"…", func(r *core.Repo) error { return r.NewBranch(name, base) }, func() { a.pickAfterLoad(secBranches, name) })
 	})
 }
 
@@ -388,7 +424,10 @@ func (a *App) stashDetail(c *ui.Context, pal *palette) {
 
 func (a *App) stashAll() {
 	a.prompt("Stash all changes", "", "Stash", false, func(msg string) {
-		a.run("Stashing…", func(r *core.Repo) error { return r.StashAll(msg) }, func() { a.section = secStash; a.stashSel = 0 })
+		a.run("Stashing…", func(r *core.Repo) error { return r.StashAll(msg) }, func() {
+			a.section = secStash
+			a.picked = &pick{sec: secStash}
+		})
 	})
 }
 

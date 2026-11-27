@@ -20,11 +20,20 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 		ui.Text(c, abbreviateHome(filepath.Dir(a.repo.Path))).FontSize(11).TextColor(pal.muted).SingleLine()
 	})
 	sel := string(a.section)
+	if a.section == secRemotes {
+		sel = "remote:" + a.remoteName
+	}
 	counts := map[section]int{}
 	if a.snap != nil {
 		counts[secChanges] = len(a.snap.Files)
 		counts[secStash] = len(a.snap.Stash)
 		counts[secBranches] = len(a.snap.Branches)
+		counts[secTags] = len(a.snap.Tags)
+		counts[secSubmodules] = len(a.snap.Submodules)
+		// The main worktree alone is no other to go to.
+		if n := len(a.snap.Worktrees); n > 1 {
+			counts[secWorktrees] = n
+		}
 	}
 	item := func(s section, svg *ui.SVG, label string, n int, key string) {
 		ui.SidebarItem(c, string(s), svg, label).Tooltip(label + " (" + key + ")").Children(func() {
@@ -37,15 +46,27 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 		ui.SidebarSection(c, "Workspace", nil, func() {
 			item(secChanges, iconChanges, "Changes", counts[secChanges], "1")
 			item(secStash, iconStash, "Stashes", counts[secStash], "4")
+			item(secWorktrees, iconWorktree, "Worktrees", counts[secWorktrees], "8")
+			item(secSubmodules, iconSubmodule, "Submodules", counts[secSubmodules], "9")
 		})
 		ui.SidebarSection(c, "Repository", nil, func() {
 			item(secHistory, iconHistory, "History", 0, "2")
 			item(secBranches, iconBranch, "Branches", counts[secBranches], "3")
+			item(secTags, iconTag, "Tags", counts[secTags], "6")
+			item(secReflog, iconReflog, "Reflog", 0, "7")
 		})
 		if a.snap != nil && len(a.snap.Remotes) > 0 {
 			ui.SidebarSection(c, "Remotes", nil, func() {
-				for _, r := range a.snap.Remotes {
-					ui.SidebarItem(c, "remote:"+r.Name, iconRemote, r.Name).Tooltip(strings.Join(r.Urls, "\n"))
+				for i, r := range a.snap.Remotes {
+					tip := strings.Join(r.Urls, "\n")
+					if i == 0 {
+						tip += "\n(5)"
+					}
+					ui.SidebarItem(c, "remote:"+r.Name, iconRemote, r.Name).Tooltip(tip).Children(func() {
+						if n := len(r.Branches); n > 0 {
+							ui.Badge(c, fmt.Sprint(n))
+						}
+					})
 				}
 			})
 		}
@@ -54,8 +75,8 @@ func (a *App) sidebar(c *ui.Context, pal *palette) {
 		list.Background(ui.Transparent)
 	}
 	if list.Changed() {
-		if strings.HasPrefix(sel, "remote:") {
-			a.section = secBranches
+		if name, ok := strings.CutPrefix(sel, "remote:"); ok {
+			a.showRemote(name)
 		} else {
 			a.section = section(sel)
 		}
@@ -98,7 +119,10 @@ func (a *App) toolbar(c *ui.Context, pal *palette) {
 	w := row.Bounds().W
 	narrow := w > 0 && w < 760
 	row.Children(func() {
-		title := map[section]string{secChanges: "Changes", secHistory: "History", secBranches: "Branches", secStash: "Stashes"}[a.section]
+		title := sectionTitles[a.section]
+		if a.section == secRemotes && a.remoteName != "" {
+			title = a.remoteName
+		}
 		ui.Text(c, title).FontSize(15).FontWeight(700).SingleLine().Shrink(0)
 		if s := a.snap; s != nil && s.Head != nil {
 			h := s.Head

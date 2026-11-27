@@ -256,7 +256,13 @@ type Snapshot struct {
 	Branches []*models.Branch
 	Commits  []*models.Commit
 	Stash    []*models.StashEntry
-	Remotes  []*models.Remote
+	// Remotes have their branches.
+	Remotes []*models.Remote
+	Tags    []*models.Tag
+	// Reflog is HEAD's, newest first, up to ReflogLimit entries.
+	Reflog     []*models.Commit
+	Worktrees  []*models.Worktree
+	Submodules []*Submodule
 	// Graph is the commit graph's rows, one per commit.
 	Graph [][]Pipe
 	// Head is the branch checked out, nil while the head is detached and
@@ -314,6 +320,7 @@ func (r *Repo) load(background bool) (*Snapshot, error) {
 	s.Stash = l.StashLoader.GetStashEntries("")
 	s.Remotes = l.RemoteLoader.GetRemotes()
 	s.State = r.git.Status.WorkingTreeState()
+	r.loadMore(s)
 	return s, nil
 }
 

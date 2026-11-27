@@ -54,15 +54,20 @@ window, then quit.
 |---|---|
 | Changes | file list with status, stage/unstage a file or everything, discard, commit (summary and description), amend |
 | Staging | lazygit's line staging: the file's diff line by line, syntax highlighted; choose lines (click, ⇧-click, `j`/`k`, `J`/`K`, `v` range, `a` hunk) and stage, unstage or discard them (`space`, `d`), or a whole hunk from its header; `tab` switches between the staged and unstaged sides |
-| History | the latest 300 commits, with lazygit's graph drawn as curves, branch and tag chips, pushed/unpushed state; commit files and per-file diff; **reword, fixup, move up/down, drop** (interactive rebase); a range of commits (⇧-click, `J`/`K`, ⇧↑/⇧↓, `v` range) to fix up, move, drop or copy at once; continue/abort banner |
+| History | the latest 300 commits, with lazygit's graph drawn as curves, branch and tag chips, pushed/unpushed state; commit files and per-file diff; **reword, fixup, move up/down, drop** (interactive rebase); a range of commits (⇧-click, ⌘-click, a drag over the rows, `J`/`K`, ⇧↑/⇧↓, `v` range; `esc` lets go) to fix up, move, drop or copy at once, from the bar under the list or the keys; a double click rewords; continue/abort banner; `t` tags a commit |
 | Conflicts | each conflict as a card of its current, base (diff3) and incoming sides, highlighted, the lines between folded; keep a side, both, or every conflict's one side (`space`, `b`, `j`/`k`, `←`/`→`), undo (`z`); the file is staged once resolved, and the app offers to continue; Abort / Skip / Continue for merges, rebases, cherry-picks and reverts, started in the app or not |
 | Branches | checkout, new, merge, rebase onto, delete; upstream ahead/behind; each branch's commits, with their graph |
+| Remote branches | each remote's branches (`5`, or the remote in the sidebar): check out as a local branch tracking it, new branch from it, merge, rebase onto, delete on the remote, fetch the remote; their commits |
+| Tags | list, new (lightweight, or annotated with a message), check out, push to a remote, delete (`6`); their commits |
+| Reflog | HEAD's reflog (`7`): each entry's commit, files and diff; check out, new branch, copy to cherry-pick, reset soft, mixed or hard to it |
+| Worktrees | list, new (a new branch or an existing one), open in a window of its own, remove (`8`) |
+| Submodules | list with their state, add, initialize and update one or all, open in a window of its own, remove (`9`) |
 | Cherry-pick | copy commits from any branch's log or the history (`C`), paste them onto the current branch (`V`), conflicts resolved as a merge's |
 | Undo / redo | lazygit's reflog undo (`z`, `Z`), interoperable with lazygit's: commits, resets, pulls, checkouts and rebases, and also cherry-picks, reverts and merges; a hard reset stashes local changes around it |
 | Stash | stash all, pop, apply, drop; files and diff |
 | Remotes | fetch, pull, push (sets the upstream on first push), force-push with lease; username/password/passphrase prompts |
 | Windows | a window per repository (⌘N, ⌘O, File → Open Recent, the Window menu); opening one already open brings its window to the front; `laziergit <path>` from a terminal opens it in the app running; the windows of the last session open again; each window keeps its place |
-| App | vibrant sidebar, ⌘K command palette, lazygit's single-key bindings (`1`–`4`, `j`/`k`, `space`, `a`, `c`, `d`, `r`, `f`, `p`, `P`, `s`, `g`, `n`, `M`, `⌃j`/`⌃k`), status-bar key hints, context menus, toasts, command log (⌘L), auto-refresh on disk changes, light and dark |
+| App | vibrant sidebar, ⌘K command palette, lazygit's single-key bindings (`1`–`9`, `j`/`k`, `space`, `a`, `c`, `d`, `r`, `f`, `p`, `P`, `s`, `g`, `n`, `M`, `⌃j`/`⌃k`), status-bar key hints, context menus, toasts, command log (⌘L), auto-refresh on disk changes, light and dark |
 
 ## Layout
 
@@ -85,11 +90,8 @@ registry.
 These are from lazygit, still to port:
 - custom patches
 - bisect
-- worktrees and submodules
 - custom commands
 - filtering and diffing modes
-- reflog
-- remote-branch and tag panels
 - settings
 
 Limitations:

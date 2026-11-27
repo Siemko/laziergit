@@ -46,27 +46,47 @@ func (a *App) historyList(c *ui.Context, pal *palette) {
 	paneHeader(c, pal, title, nil)
 	gw := graphWidth(a.snap.Graph)
 	a.commitsList.Selected = &a.commitSel
+	a.commitsList.Selection = &a.commitsChosen
+	a.commitsList.DragSelect = true
 	a.commitsList.Key = func(i int) any { return commits[i].Hash() }
 	a.commitsList.Label = func(i int) string { return commits[i].Name }
+	// The commit the keys are on is chosen, unless a Cmd-click took it
+	// out of others chosen.
+	if a.commitsChosen.Len() == 0 && a.commitSel >= 0 && a.commitSel < n {
+		a.commitsChosen.Add(commits[a.commitSel].Hash())
+	}
+	// A range extends from the commit the keys are on, until one is set.
+	if a.commitAnchor == "" {
+		a.setAnchor(a.commitSel)
+	}
 	hot := a.hot(c, paneList)
 	var list ui.Element
-	shiftClicked := -1
 	listIn(c, hot, func() {
 		list = ui.List(c.Key("commits"), &a.commitsList, n, func(i int) {
-			chosen := i == a.commitSel || a.commitsChosen.Has(commits[i].Hash())
-			row := a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, chosen, hot, a.listW).
+			chosen := a.commitsChosen.Has(commits[i].Hash())
+			a.commitRow(c, pal, commits[i], a.snap.Graph[i], gw, chosen, hot, a.listW).
 				ContextMenu(func(m *ui.Menu) { a.commitMenu(m, i) })
-			if row.Clicked() && row.ClickModifiers()&ui.Shift != 0 {
-				shiftClicked = i
-			}
-		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneList).FocusRing(false)
+		}).Grow(1).Padding(4, 6).FocusBind(&a.pane, paneList).FocusRing(false).ObserveInput(a.observeCommitInput)
 	})
-	if a.followCommitSel(shiftClicked) {
-		c.Invalidate() // the rows built show the range as it was
+	if n > 0 && a.commitSel < 0 {
+		// The commit the keys were on is gone: they go to the row it had.
+		a.commitsList.Choose(max(0, min(a.commitSelWas, n-1)))
+		a.commitsChosen.Clear()
+		c.Invalidate()
+	}
+	a.commitSelWas = a.commitSel
+	if list.Changed() && a.followCommitList() {
+		c.Invalidate() // the rows built show the range as the list left it
 	}
 	if list.Submitted() {
-		a.pane = paneFiles
+		// A double click rewords the commit; Enter goes to its files.
+		if in := a.commitIn; in.pointer && in.clicks >= 2 && a.selectedCommit() != nil {
+			a.reword(a.commitSel)
+		} else {
+			a.pane = paneFiles
+		}
 	}
+	a.rangeBar(c, pal)
 }
 
 // commitRow is a commit of a log: its graph, refs, subject, author, age
@@ -149,9 +169,11 @@ func (a *App) commitRow(c *ui.Context, pal *palette, cm *models.Commit, row []co
 func (a *App) commitMenu(m *ui.Menu, i int) {
 	commits := a.snap.Commits
 	if !a.commitsChosen.Has(commits[i].Hash()) {
+		a.commitSticky = false
 		a.chooseCommits(i, i)
+		a.setAnchor(i)
 	}
-	a.commitSel, a.commitSelSeen = i, i
+	a.commitsList.Choose(i)
 	n := len(a.chosenCommits())
 	copyItem, dropItem := copyLabel(a.isCopied(commits[i])), "Drop Commit…"
 	if n > 1 {

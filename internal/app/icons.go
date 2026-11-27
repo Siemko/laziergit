@@ -24,4 +24,12 @@ var (
 	iconUndo     = icon(`<path d="M5 3L2 6l3 3"/><path d="M2 6h7.5a4.5 4.5 0 0 1 0 9H6"/>`)
 	iconRedo     = icon(`<path d="M11 3l3 3-3 3"/><path d="M14 6H6.5a4.5 4.5 0 0 0 0 9H10"/>`)
 	iconWarning  = icon(`<path d="M8 2l6.5 11.5h-13z"/><path d="M8 6.5v3M8 11.5v.01"/>`)
+	// A price tag.
+	iconTag = icon(`<path d="M1.5 2.5v5l7 7 6-6-7-7h-5z"/><circle cx="5" cy="5.5" r="1.1"/>`)
+	// A clock turned back.
+	iconReflog = icon(`<path d="M2.6 5.5A6 6 0 1 1 2 8"/><path d="M2.2 2.5v3h3"/><path d="M8 4.8V8l2.2 1.6"/>`)
+	// Two folders side by side, of one branch.
+	iconWorktree = icon(`<rect x="1.5" y="3.5" width="6" height="9" rx="1.5"/><rect x="8.5" y="3.5" width="6" height="9" rx="1.5"/><path d="M4.5 6.5v3M11.5 6.5v3"/>`)
+	// A box within a box.
+	iconSubmodule = icon(`<rect x="1.5" y="1.5" width="13" height="13" rx="2.5"/><rect x="5" y="5" width="6" height="6" rx="1.2"/>`)
 )

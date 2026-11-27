@@ -27,6 +27,9 @@ func plural(n int, noun string) string {
 	if strings.HasSuffix(noun, "sh") || strings.HasSuffix(noun, "ch") {
 		return fmt.Sprintf("%d %ses", n, noun)
 	}
+	if stem, ok := strings.CutSuffix(noun, "y"); ok && stem != "" && !strings.ContainsAny(stem[len(stem)-1:], "aeiou") {
+		return fmt.Sprintf("%d %sies", n, stem)
+	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 

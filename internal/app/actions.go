@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -27,11 +28,22 @@ func (a *App) actions() []action {
 	s := a.snap
 	file, commit, branch, stash := a.selectedFile(), a.selectedCommit(), a.selectedBranch(), a.selectedStash()
 	hasFiles := s != nil && len(s.Files) > 0
+	// History's actions act on the commits chosen, and say so.
+	many := s != nil && len(a.chosenCommits()) > 1
+	commits := "Commit"
+	if many {
+		commits = "Commits"
+	}
 	acts := []action{
 		{title: "Go to Changes", mods: 0, key: ui.Key1, keyName: "1", enabled: true, run: func() { a.goTo(secChanges) }},
 		{title: "Go to History", key: ui.Key2, keyName: "2", enabled: true, run: func() { a.goTo(secHistory) }},
 		{title: "Go to Branches", key: ui.Key3, keyName: "3", enabled: true, run: func() { a.goTo(secBranches) }},
 		{title: "Go to Stashes", key: ui.Key4, keyName: "4", enabled: true, run: func() { a.goTo(secStash) }},
+		{title: "Go to Remote Branches", key: ui.Key5, keyName: "5", enabled: s != nil && len(s.Remotes) > 0, run: a.goToRemotes},
+		{title: "Go to Tags", key: ui.Key6, keyName: "6", enabled: true, run: func() { a.goTo(secTags) }},
+		{title: "Go to Reflog", key: ui.Key7, keyName: "7", enabled: true, run: func() { a.goTo(secReflog) }},
+		{title: "Go to Worktrees", key: ui.Key8, keyName: "8", enabled: true, run: func() { a.goTo(secWorktrees) }},
+		{title: "Go to Submodules", key: ui.Key9, keyName: "9", enabled: true, run: func() { a.goTo(secSubmodules) }},
 		{title: "Next Item", key: ui.KeyJ, keyName: "j", enabled: true, run: func() { a.step(1) }},
 		{title: "Previous Item", key: ui.KeyK, keyName: "k", enabled: true, run: func() { a.step(-1) }},
 		{title: "Focus Diff", key: ui.KeyL, keyName: "l", enabled: true, run: func() { a.focusRight() }},
@@ -73,20 +85,22 @@ func (a *App) actions() []action {
 		{title: "Stash All Changes", section: secChanges, key: ui.KeyS, keyName: "s", hint: true, enabled: hasFiles, run: a.stashAll},
 
 		// History
-		{title: "Reword Commit…", section: secHistory, key: ui.KeyR, keyName: "r", hint: true, enabled: commit != nil,
+		{title: "Reword Commit…", section: secHistory, key: ui.KeyR, keyName: "r", hint: true, enabled: commit != nil && !many,
 			run: func() { a.reword(a.commitSel) }},
 		{title: "Fixup Into Commit Below", section: secHistory, key: ui.KeyF, keyName: "f", hint: true,
 			enabled: commit != nil && a.canFixupChosen(), run: a.fixupChosen},
-		{title: "Drop Commit…", section: secHistory, key: ui.KeyD, keyName: "d", hint: true, enabled: commit != nil, run: a.dropChosen},
-		{title: "Move Commit Down", section: secHistory, mods: ui.Ctrl, key: ui.KeyJ, keyName: "⌃j", hint: true, enabled: commit != nil,
+		{title: "Drop " + commits + "…", section: secHistory, key: ui.KeyD, keyName: "d", hint: true, enabled: commit != nil, run: a.dropChosen},
+		{title: "Move " + commits + " Down", section: secHistory, mods: ui.Ctrl, key: ui.KeyJ, keyName: "⌃j", hint: true, enabled: commit != nil,
 			run: func() { a.moveChosen(1) }},
-		{title: "Move Commit Up", section: secHistory, mods: ui.Ctrl, key: ui.KeyK, keyName: "⌃k", hint: true, enabled: commit != nil,
+		{title: "Move " + commits + " Up", section: secHistory, mods: ui.Ctrl, key: ui.KeyK, keyName: "⌃k", hint: true, enabled: commit != nil,
 			run: func() { a.moveChosen(-1) }},
 
-		{title: "Copy Commit (Cherry-Pick)", section: secHistory, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true, enabled: commit != nil,
+		{title: "Copy " + commits + " (Cherry-Pick)", section: secHistory, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true, enabled: commit != nil,
 			run: a.copyCommits},
 		{title: "Toggle Range Selection", section: secHistory, pane: paneList, key: ui.KeyV, keyName: "v", hint: true, enabled: commit != nil,
 			run: a.toggleCommitRange},
+		{title: "Clear Selection", section: secHistory, pane: paneList, key: ui.KeyEscape, keyName: "esc", hint: true, enabled: a.ranged(),
+			run: a.clearCommitRange},
 		{title: "Extend Down", section: secHistory, pane: paneList, mods: ui.Shift, key: ui.KeyJ, keyName: "J", enabled: commit != nil,
 			run: func() { a.extendCommits(1) }},
 		{title: "Extend Up", section: secHistory, pane: paneList, mods: ui.Shift, key: ui.KeyK, keyName: "K", enabled: commit != nil,
@@ -97,14 +111,6 @@ func (a *App) actions() []action {
 			run: func() { a.extendCommits(-1) }},
 
 		// Branches
-		{title: "Copy Commit (Cherry-Pick)", section: secBranches, pane: paneFiles, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true,
-			enabled: a.branchCommitSel < len(a.branchCommits), run: func() {
-				if b := a.selectedBranch(); b != nil {
-					a.toggleCopy(b.Name, a.branchCommits, a.branchCommitSel)
-				}
-			}},
-		{title: "Back to Branches", section: secBranches, pane: paneFiles, key: ui.KeyEscape, keyName: "esc", hint: true, enabled: true,
-			run: func() { a.pane = paneList }},
 		{title: "Checkout Branch", section: secBranches, key: ui.KeySpace, keyName: "space", hint: true, enabled: branch != nil,
 			run: func() { a.checkout(branch) }},
 		{title: "New Branch…", section: secBranches, key: ui.KeyN, keyName: "n", hint: true, enabled: true, run: a.newBranch},
@@ -121,6 +127,8 @@ func (a *App) actions() []action {
 			run: func() { a.run("Applying…", func(r *core.Repo) error { return r.StashApply(stash) }) }},
 		{title: "Drop Stash…", section: secStash, key: ui.KeyD, keyName: "d", hint: true, enabled: stash != nil, run: func() { a.stashDrop(stash) }},
 	}
+	acts = append(acts, a.refActions()...)
+	acts = append(acts, a.panelActions()...)
 	if file != nil && file.HasInlineMergeConflicts {
 		acts = append(acts, a.conflictActions(file)...)
 	} else {
@@ -162,10 +170,10 @@ func (a *App) current() (*int, int, *ui.ListState) {
 	if a.snap == nil {
 		return nil, 0, nil
 	}
-	if a.pane == paneFiles && a.section == secBranches {
+	if a.pane == paneFiles && refSection(a.section) {
 		return &a.branchCommitSel, len(a.branchCommits), &a.branchCommitsList
 	}
-	if a.pane == paneFiles {
+	if a.pane == paneFiles && filesSection(a.section) {
 		return &a.detailFileSel, len(a.detailFiles), &a.detailFilesList
 	}
 	switch a.section {
@@ -177,15 +185,25 @@ func (a *App) current() (*int, int, *ui.ListState) {
 		return &a.branchSel, len(a.snap.Branches), &a.branchesList
 	case secStash:
 		return &a.stashSel, len(a.snap.Stash), &a.stashList
+	case secRemotes:
+		return &a.remoteBranchSel, len(a.remoteBranches()), &a.remoteBranchesList
+	case secTags:
+		return &a.tagSel, len(a.snap.Tags), &a.tagsList
+	case secReflog:
+		return &a.reflogSel, len(a.snap.Reflog), &a.reflogList
+	case secWorktrees:
+		return &a.worktreeSel, len(a.snap.Worktrees), &a.worktreesList
+	case secSubmodules:
+		return &a.submoduleSel, len(a.snap.Submodules), &a.submodulesList
 	}
 	return nil, 0, nil
 }
 
 func (a *App) focusRight() {
 	switch {
-	case a.pane == paneList && (a.section == secHistory || a.section == secStash || a.section == secBranches):
+	case a.pane == paneList && (filesSection(a.section) || refSection(a.section)):
 		a.pane = paneFiles
-	case a.pane == paneList && a.section == secChanges, a.pane == paneFiles && a.section != secBranches:
+	case a.pane == paneList && a.section == secChanges, a.pane == paneFiles && filesSection(a.section):
 		a.pane = paneDiff
 	}
 }
@@ -193,13 +211,96 @@ func (a *App) focusRight() {
 func (a *App) focusLeft() {
 	switch a.pane {
 	case paneDiff:
-		if a.section == secHistory || a.section == secStash || a.section == secBranches {
+		if filesSection(a.section) {
 			a.pane = paneFiles
 		} else {
 			a.pane = paneList
 		}
 	case paneFiles, paneSummary, paneDescription:
 		a.pane = paneList
+	}
+}
+
+// refActions are the keys of the commits of a branch, a remote branch or
+// a tag, while the keys are in them.
+func (a *App) refActions() []action {
+	var acts []action
+	for _, s := range []section{secBranches, secRemotes, secTags} {
+		back := "Back to " + sectionTitles[s]
+		acts = append(acts,
+			action{title: "Copy Commit (Cherry-Pick)", section: s, pane: paneFiles, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true,
+				enabled: a.branchCommitSel < len(a.branchCommits), run: func() {
+					if name := a.refName(); name != "" {
+						a.toggleCopy(name, a.branchCommits, a.branchCommitSel)
+					}
+				}},
+			action{title: back, section: s, pane: paneFiles, key: ui.KeyEscape, keyName: "esc", hint: true, enabled: true,
+				run: func() { a.pane = paneList }})
+	}
+	return acts
+}
+
+// panelActions are the keys of the remote branches, the tags, the reflog,
+// the worktrees and the submodules.
+func (a *App) panelActions() []action {
+	if a.snap == nil {
+		return nil
+	}
+	rb, tag, entry, wt, sm := a.selectedRemoteBranch(), a.selectedTag(), a.selectedReflog(), a.selectedWorktree(), a.selectedSubmodule()
+	return []action{
+		// Remote branches
+		{title: "Checkout Remote Branch", section: secRemotes, key: ui.KeySpace, keyName: "space", hint: true, enabled: rb != nil,
+			run: func() { a.checkoutRemoteBranch(rb) }},
+		{title: "New Branch From Remote Branch…", section: secRemotes, key: ui.KeyN, keyName: "n", hint: true, enabled: rb != nil,
+			run: func() { a.newBranchFrom(rb.FullName()) }},
+		{title: "Merge Into Current Branch…", section: secRemotes, mods: ui.Shift, key: ui.KeyM, keyName: "M", hint: true, enabled: rb != nil,
+			run: func() { a.mergeRef(rb.FullName()) }},
+		{title: "Rebase Current Branch Onto…", section: secRemotes, key: ui.KeyR, keyName: "r", hint: true, enabled: rb != nil,
+			run: func() { a.rebaseOntoRef(rb.FullName()) }},
+		{title: "Delete Remote Branch…", section: secRemotes, key: ui.KeyD, keyName: "d", hint: true, enabled: rb != nil,
+			run: func() { a.deleteRemoteBranch(rb) }},
+		{title: "Fetch Remote", section: secRemotes, key: ui.KeyF, keyName: "f", hint: true, enabled: a.remote() != nil, run: a.fetchRemote},
+
+		// Tags
+		{title: "Checkout Tag…", section: secTags, key: ui.KeySpace, keyName: "space", hint: true, enabled: tag != nil,
+			run: func() { a.checkoutTag(tag) }},
+		{title: "New Tag…", section: secTags, key: ui.KeyN, keyName: "n", hint: true, enabled: true, run: func() { a.newTag("HEAD") }},
+		{title: "Push Tag…", section: secTags, mods: ui.Shift, key: ui.KeyP, keyName: "P", hint: true, enabled: tag != nil && len(a.snap.Remotes) > 0,
+			run: func() { a.pushTag(tag) }},
+		{title: "Delete Tag…", section: secTags, key: ui.KeyD, keyName: "d", hint: true, enabled: tag != nil, run: func() { a.deleteTag(tag) }},
+		{title: "Tag Commit…", section: secHistory, key: ui.KeyT, keyName: "t", enabled: a.selectedCommit() != nil,
+			run: func() { a.newTag(a.selectedCommit().Hash()) }},
+
+		// Reflog
+		{title: "Checkout Commit…", section: secReflog, key: ui.KeySpace, keyName: "space", hint: true, enabled: entry != nil,
+			run: func() { a.checkoutCommit(entry) }},
+		{title: "New Branch From Here…", section: secReflog, key: ui.KeyN, keyName: "n", hint: true, enabled: entry != nil,
+			run: func() { a.newBranchFrom(entry.Hash()) }},
+		{title: "Reset Hard to Here…", section: secReflog, key: ui.KeyG, keyName: "g", hint: true, enabled: entry != nil,
+			run: func() { a.resetTo(entry, core.ResetHard) }},
+		{title: "Reset Soft to Here", section: secReflog, enabled: entry != nil, run: func() { a.resetTo(entry, core.ResetSoft) }},
+		{title: "Reset Mixed to Here", section: secReflog, enabled: entry != nil, run: func() { a.resetTo(entry, core.ResetMixed) }},
+		{title: "Copy Commit (Cherry-Pick)", section: secReflog, mods: ui.Shift, key: ui.KeyC, keyName: "C", hint: true, enabled: entry != nil,
+			run: func() { a.toggleCopy("the reflog", a.snap.Reflog, a.reflogSel) }},
+
+		// Worktrees
+		{title: "Open Worktree in a Window", section: secWorktrees, key: ui.KeySpace, keyName: "space", hint: true,
+			enabled: wt != nil && !wt.IsCurrent && !wt.IsPathMissing, run: func() { a.openRepository(wt.Path) }},
+		{title: "New Worktree…", key: ui.KeyN, section: secWorktrees, keyName: "n", hint: true, enabled: true, run: a.newWorktree},
+		{title: "New Worktree From Branch…", section: secBranches, key: ui.KeyW, keyName: "w", enabled: a.selectedBranch() != nil, run: a.newWorktree},
+		{title: "Remove Worktree…", section: secWorktrees, key: ui.KeyD, keyName: "d", hint: true,
+			enabled: wt != nil && !wt.IsMain && !wt.IsCurrent, run: func() { a.removeWorktree(wt) }},
+
+		// Submodules
+		{title: "Open Submodule in a Window", section: secSubmodules, key: ui.KeySpace, keyName: "space", hint: true,
+			enabled: sm != nil && sm.Initialized(), run: func() { a.openRepository(filepath.Join(a.repo.Path, sm.Path)) }},
+		{title: "Update Submodule", section: secSubmodules, key: ui.KeyU, keyName: "u", hint: true, enabled: sm != nil,
+			run: func() { a.updateSubmodule(sm) }},
+		{title: "Update All Submodules", section: secSubmodules, mods: ui.Shift, key: ui.KeyU, keyName: "U", hint: true,
+			enabled: len(a.snap.Submodules) > 0, run: a.updateAllSubmodules},
+		{title: "Add Submodule…", section: secSubmodules, key: ui.KeyN, keyName: "n", hint: true, enabled: true, run: a.addSubmodule},
+		{title: "Remove Submodule…", section: secSubmodules, key: ui.KeyD, keyName: "d", hint: true, enabled: sm != nil,
+			run: func() { a.removeSubmodule(sm) }},
 	}
 }
 
@@ -219,10 +320,19 @@ func (a *App) shortcuts(c *ui.Context) {
 	}
 	textual := c.FocusTakesText()
 	acts := a.actions()
-	// The focused pane's actions take their keys first.
-	for _, ownPane := range []bool{true, false} {
+	// The focused pane's actions take their keys first, then the
+	// section's, as P pushes a tag in Tags, then those of every section.
+	const (
+		ownPane = iota
+		ownSection
+		everywhere
+	)
+	for _, pass := range []int{ownPane, ownSection, everywhere} {
 		for _, act := range acts {
-			if (act.pane != paneNone) != ownPane || ownPane && act.pane != a.pane {
+			switch {
+			case (act.pane != paneNone) != (pass == ownPane), pass == ownPane && act.pane != a.pane:
+				continue
+			case pass == ownSection && act.section == "", pass == everywhere && act.section != "":
 				continue
 			}
 			if act.keyName == "" || act.section != "" && act.section != a.section || !act.enabled {
@@ -299,7 +409,7 @@ func paneForHints(a *App) pane {
 	switch {
 	case a.pane == paneDiff && a.section == secChanges:
 		return paneDiff
-	case a.pane == paneFiles && a.section == secBranches:
+	case a.pane == paneFiles && refSection(a.section):
 		return paneFiles
 	}
 	return paneNone
