@@ -2,3 +2,4 @@ build/
 dist/
 *.png
 !resources/icon.png
+!docs/images/*.png

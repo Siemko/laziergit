@@ -1,13 +1,27 @@
 # laziergit
 
-A proof of concept: [lazygit](https://github.com/jesseduffield/lazygit)'s
-functionality in a native desktop app, drawn on the GPU by
-[MyGo](https://github.com/egoist/mygo). No webview, no terminal.
+[lazygit](https://github.com/jesseduffield/lazygit)'s power, as a native
+Mac app. Not Electron, not a webview, not a terminal: drawn on the GPU by
+[MyGo](https://github.com/egoist/mygo), on top of lazygit's own git engine.
 
-lazygit's git layer (`pkg/commands`) is imported as a Go library, so the
-git behaviour (loaders, staging, interactive rebase through lazygit's
-daemon, push and pull with credential prompts) is lazygit's own. Only the UI
-is new.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/history-dark.png">
+  <img alt="laziergit's History: three commits chosen with the mouse, and the diff of one" src="docs/images/history.png">
+</picture>
+
+lazygit's git layer (`pkg/commands`) is imported as a Go library, so what
+the app does to your repository is lazygit's, tested by its many users:
+the loaders, staging, interactive rebase through lazygit's daemon, push and
+pull with credential prompts, undo through the reflog. Only the interface
+is new, and it is a Mac app's: the mouse and the keyboard both work, with
+lazygit's keys.
+
+![Choosing commits with the mouse, copying them, cherry-picking them onto a
+release branch, and staging a single line](docs/images/demo.gif)
+
+| Line staging | Settings |
+|---|---|
+| ![The diff of a file, line by line, with lines to stage chosen](docs/images/staging.png) | ![The Settings window](docs/images/settings.png) |
 
 ## Install
 
@@ -18,6 +32,10 @@ brew install Siemko/tap/laziergit
 laziergit            # in a repository, or:
 ln -sf "$(brew --prefix)/opt/laziergit/laziergit.app" /Applications/laziergit.app
 ```
+
+`brew upgrade laziergit` updates it. A copy from a [release](https://github.com/Siemko/laziergit/releases)'s
+disk image updates itself: it checks for a new version once a day, and
+laziergit → Check for Updates… checks now.
 
 With Go 1.27.3+ (a `laziergit` command, without the app bundle):
 
@@ -44,7 +62,10 @@ go tool mygo build            # build/darwin-arm64/laziergit.app and a .dmg
 ```
 
 `LAZIERGIT_SNAPSHOTS=<dir> go test ./internal/app` saves PNGs of the views
-the tests drive. `LAZIERGIT_CAPTURE=<file.png>` (with an optional
+the tests drive. `scripts/media.sh` makes the README's pictures and the
+demo, from a copy of this repository, drawn by the app (it needs ffmpeg).
+`LAZIERGIT_PERF_REPO=<repo>` with `go test -run 'TestLoadTimes|TestFrameTimes' -v
+./internal/...` times a load and the window's frames in a large repository. `LAZIERGIT_CAPTURE=<file.png>` (with an optional
 `LAZIERGIT_CAPTURE_SECTION=history`) makes the app save a picture of its
 window, then quit.
 
@@ -74,7 +95,8 @@ window, then quit.
 
 ```
 tools/genicon       draws resources/icon.png
-scripts/            the third-party notices, and the Homebrew formula of a release
+scripts/            the third-party notices, the Homebrew formula of a release, the README's media
+docs/images/        the README's pictures, made by scripts/media.sh
 main.go             startup: lazygit's rebase daemon, the login shell's PATH, a single instance
 windows.go          the windows, their menus, recent repositories and the session
 internal/core       a thin adapter over lazygit's GitCommand: Open, Load (a Snapshot), actions
@@ -109,9 +131,17 @@ and hooks find theirs. `LAZIERGIT_DEBUG=1` logs what the windows do.
 
 ## Releasing
 
-Bump `version` in `mygo.json`, run `scripts/notices.sh`, commit, and push the
-tag `v<version>`: the release workflow tests, builds and publishes the app.
-Then `scripts/formula.sh <version>` prints the tap's formula.
+Bump `version` in `mygo.json`, add the version's section to `CHANGELOG.md`
+(its release notes, which the app shows as it offers the update), run
+`scripts/notices.sh`, commit, and push the tag `v<version>`: the release
+workflow tests, builds and publishes the app. Then `scripts/formula.sh
+<version>` prints the tap's formula.
+
+Installed apps accept only updates signed with the key whose public half is
+`mygo.json`'s `updates.publicKey`. The secret half is the repository's
+`MYGO_UPDATER_PRIVATE_KEY` secret, which the release workflow signs with; its
+copy is in `~/Library/Application Support/mygo/update-keys`. Keep a copy in
+a password manager: without it, installed apps can't be updated again.
 
 ## License
 
