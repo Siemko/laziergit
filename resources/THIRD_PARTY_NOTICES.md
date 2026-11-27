@@ -699,7 +699,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
    limitations under the License.
 ```
 
-## github.com/egoist/mygo v0.8.3
+## github.com/egoist/mygo v0.10.0
 
 ```
 MIT License
